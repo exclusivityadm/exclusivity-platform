@@ -1,0 +1,25 @@
+# Environment and keys
+.env
+.env.*
+*.env
+**/.env
+**/.env.*
+
+# System and build artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+*.sqlite3
+
+# Node / frontend
+node_modules/
+.next/
+dist/
+build/
+
+# Zips and backups
+*.zip
+*.tar.gz
+*.bak
