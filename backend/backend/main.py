@@ -1,25 +1,29 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
-from .config import env
+from .config import settings
+from .modules.conversational_ai.router import router as ai_router
 
-from .routers import health, ai, shopify, tokens, analytics, tiers, settings, voice
+app = FastAPI(title="Exclusivity Backend", version="2025.01")
 
-app = FastAPI(title="Exclusivity Platform API", version=env("APP_VERSION","1.0.0"))
-
-origins = (env("CORS_ORIGINS") or "http://127.0.0.1:3000").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[o.strip() for o in origins],
+    allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-app.include_router(health.router, prefix="")
-app.include_router(ai.router, prefix="/ai", tags=["ai"])
-app.include_router(voice.router, prefix="/voice", tags=["voice"])
-app.include_router(shopify.router, prefix="/shopify", tags=["shopify"])
-app.include_router(tokens.router, prefix="/tokens", tags=["tokens"])
-app.include_router(analytics.router, prefix="/analytics", tags=["analytics"])
-app.include_router(tiers.router, prefix="/tiers", tags=["tiers"])
-app.include_router(settings.router, prefix="/settings", tags=["settings"])
+@app.get("/health")
+def health():
+    return {"status": "ok", "env": settings.ENVIRONMENT}
+
+app.include_router(ai_router, prefix="/ai", tags=["ai"])
+
+def get_supabase_client():
+    try:
+        from supabase import create_client, Client  # type: ignore
+    except Exception as e:
+        raise RuntimeError("Supabase client import failed. Error: %s" % e)
+    if not settings.SUPABASE_URL or not settings.SUPABASE_KEY:
+        raise RuntimeError("Supabase credentials are missing.")
+    return create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
