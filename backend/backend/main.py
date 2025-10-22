@@ -1,8 +1,10 @@
+import os, sys
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from .config import settings
 from .modules.conversational_ai.router import router as ai_router
-from routers import voice_router
+from backend.routers import voice
 
 app.include_router(voice_router.router)
 app = FastAPI(title="Exclusivity Backend", version="2025.01")
