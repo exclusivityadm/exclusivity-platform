@@ -4,7 +4,6 @@ from .config import settings
 from .modules.conversational_ai.router import router as ai_router
 from routers import voice_router
 
-app.include_router(voice.router)
 app.include_router(voice_router.router)
 app = FastAPI(title="Exclusivity Backend", version="2025.01")
 
