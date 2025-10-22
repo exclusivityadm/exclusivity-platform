@@ -1,58 +1,52 @@
-import os, sys
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from fastapi import FastAPI, Response
-from fastapi.middleware.cors import CORSMiddleware
-from .config import settings
-from .modules.conversational_ai.router import router as ai_router
-from routers import voice
-
-app.include_router(voice_router.router)
-app = FastAPI(title="Exclusivity Backend", version="2025.01")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-@app.get("/health")
-def health():
-    return {"status": "ok", "env": settings.ENVIRONMENT}
-
-app.include_router(ai_router, prefix="/ai", tags=["ai"])
-
-def get_supabase_client():
-    try:
-        from supabase import create_client, Client  # type: ignore
-    except Exception as e:
-        raise RuntimeError("Supabase client import failed. Error: %s" % e)
-    if not settings.SUPABASE_URL or not settings.SUPABASE_KEY:
-        raise RuntimeError("Supabase credentials are missing.")
-    return create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
-
-# backend/backend/main.py
+# main.py — universal safe import handler
+import os
+import sys
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-import os
 
-app = FastAPI()
+# --- Path repair ---
+# Ensure Python can always find the current and parent backend dirs
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+PARENT_DIR = os.path.dirname(CURRENT_DIR)
+if CURRENT_DIR not in sys.path:
+sys.path.append(CURRENT_DIR)
+if PARENT_DIR not in sys.path:
+sys.path.append(PARENT_DIR)
 
-# CORS (keep your existing origins; here’s a permissive example)
+# --- Import routers safely ---
+try:
+from routers import voice # Normal relative import
+except ModuleNotFoundError:
+import importlib
+voice = importlib.import_module("backend.routers.voice")
+
+# --- FastAPI initialization ---
+app = FastAPI(title="Exclusivity Backend", version="1.0")
+
+# --- CORS setup ---
 app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[os.getenv("CORS_ORIGIN", "*")],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+CORSMiddleware,
+allow_origins=["*"], # You can restrict to your Vercel domain later
+allow_credentials=True,
+allow_methods=["*"],
+allow_headers=["*"],
 )
 
+# --- Include routers ---
+app.include_router(voice.router, prefix="/api/voice", tags=["Voice"])
+
+# --- Root route ---
+@app.get("/")
+async def root():
+return {"status": "ok", "message": "Exclusivity backend operational."}
+
+# --- Healthcheck endpoint ---
 @app.get("/health")
-def health():
-    return {"status": "ok"}
+async def health_check():
+return {"status": "healthy", "environment": os.getenv("ENV", "development")}
 
-# NEW: register voice router
-from .routes.voice import router as voice_router
-app.include_router(voice_router)
 
+# --- Run manually for local dev ---
+if __name__ == "__main__":
+import uvicorn
+uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
