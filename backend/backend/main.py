@@ -2,7 +2,6 @@ from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from .config import settings
 from .modules.conversational_ai.router import router as ai_router
-from routes import voice
 from routers import voice_router
 
 app.include_router(voice.router)
