@@ -27,3 +27,28 @@ def get_supabase_client():
     if not settings.SUPABASE_URL or not settings.SUPABASE_KEY:
         raise RuntimeError("Supabase credentials are missing.")
     return create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
+
+# backend/backend/main.py
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+import os
+
+app = FastAPI()
+
+# CORS (keep your existing origins; here’s a permissive example)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[os.getenv("CORS_ORIGIN", "*")],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+# NEW: register voice router
+from .routes.voice import router as voice_router
+app.include_router(voice_router)
+
