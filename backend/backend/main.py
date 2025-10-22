@@ -1,52 +1,34 @@
-# main.py — universal safe import handler
 import os
 import sys
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-# --- Path repair ---
-# Ensure Python can always find the current and parent backend dirs
+# --- Handle path imports ---
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PARENT_DIR = os.path.dirname(CURRENT_DIR)
-if CURRENT_DIR not in sys.path:
 sys.path.append(CURRENT_DIR)
-if PARENT_DIR not in sys.path:
-sys.path.append(PARENT_DIR)
 
-# --- Import routers safely ---
-try:
-from routers import voice # Normal relative import
-except ModuleNotFoundError:
-import importlib
-voice = importlib.import_module("backend.routers.voice")
+from routers import voice  # <- ensure you have backend/routers/voice.py
 
-# --- FastAPI initialization ---
-app = FastAPI(title="Exclusivity Backend", version="1.0")
+app = FastAPI(title="Exclusivity Backend")
 
 # --- CORS setup ---
 app.add_middleware(
-CORSMiddleware,
-allow_origins=["*"], # You can restrict to your Vercel domain later
-allow_credentials=True,
-allow_methods=["*"],
-allow_headers=["*"],
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-# --- Include routers ---
-app.include_router(voice.router, prefix="/api/voice", tags=["Voice"])
-
-# --- Root route ---
+# --- Root health check ---
 @app.get("/")
-async def root():
-return {"status": "ok", "message": "Exclusivity backend operational."}
+def root():
+    return {"status": "ok", "message": "Backend is running successfully."}
 
-# --- Healthcheck endpoint ---
-@app.get("/health")
-async def health_check():
-return {"status": "healthy", "environment": os.getenv("ENV", "development")}
+# --- Include routes ---
+app.include_router(voice.router, prefix="/voice", tags=["Voice"])
 
-
-# --- Run manually for local dev ---
+# --- Local dev entry point ---
 if __name__ == "__main__":
-import uvicorn
-uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+    import uvicorn
+    uvicorn.run("backend.main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=True)
