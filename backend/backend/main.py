@@ -4,7 +4,7 @@ from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from .config import settings
 from .modules.conversational_ai.router import router as ai_router
-from backend.routers import voice
+from routers import voice
 
 app.include_router(voice_router.router)
 app = FastAPI(title="Exclusivity Backend", version="2025.01")
