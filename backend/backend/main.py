@@ -6,7 +6,7 @@ from routes import voice
 from routers import voice_router
 
 app.include_router(voice.router)
-app.include_router(voice_router.router
+app.include_router(voice_router.router)
 app = FastAPI(title="Exclusivity Backend", version="2025.01")
 
 app.add_middleware(
