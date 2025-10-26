@@ -1,0 +1,10 @@
+fastapi==0.115.5
+uvicorn[standard]==0.32.0
+httpx==0.27.2
+python-dotenv==1.0.1
+pydantic==2.10.3
+typing-extensions==4.15.0
+anyio==4.11.0
+starlette==0.41.3
+gunicorn==23.0.0
+requests==2.32.3
