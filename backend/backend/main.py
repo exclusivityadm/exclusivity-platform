@@ -90,12 +90,12 @@ async def openai_tts(text: str, voice: str, fmt: str) -> bytes:
 def pick_voice_ids(speaker: str):
     if speaker == "orion":
         return (
-            os.getenv("ELEVENLABS_VOICE_ORION_ID"),
+            os.getenv("ELEVENLABS_VOICE_ORION"),
             os.getenv("OPENAI_VOICE_ORION", "alloy")
         )
     else:
         return (
-            os.getenv("ELEVENLABS_VOICE_LYRIC_ID"),
+            os.getenv("ELEVENLABS_VOICE_LYRIC"),
             os.getenv("OPENAI_VOICE_LYRIC", "verse")
         )
 
