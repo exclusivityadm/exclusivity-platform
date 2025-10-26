@@ -1,181 +1,147 @@
-# main.py
 import os
-import httpx
-from typing import Optional, Literal, Tuple
+import asyncio
+from typing import Optional, Literal
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import PlainTextResponse, StreamingResponse, JSONResponse
 from pydantic import BaseModel
-import asyncio
+import httpx
 
-# -------------------------------------------------
-# FastAPI App Setup
-# -------------------------------------------------
-app = FastAPI(title="LUX Loyalty Voice Service")
+# ------- Config & App -------
+ENV = os.getenv("ENVIRONMENT", "production")
+ALLOW_ORIGINS = os.getenv("ALLOW_ORIGINS", "*")
 
-allow_origins = os.getenv("ALLOW_ORIGINS", "*").split(",")
+app = FastAPI(title="Exclusivity Backend", version="6.0")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allow_origins,
+    allow_origins=[o.strip() for o in ALLOW_ORIGINS.split(",")] if ALLOW_ORIGINS else ["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# -------------------------------------------------
-# Models
-# -------------------------------------------------
+# ------- Health -------
+@app.get("/", response_class=PlainTextResponse)
+async def root():
+    return "OK - Exclusivity Backend v6.0"
+
+@app.get("/health", response_class=JSONResponse)
+async def health():
+    return {"status": "ok", "version": "6.0"}
+
+# ------- Models -------
 Speaker = Literal["orion", "lyric"]
 
 class SpeakRequest(BaseModel):
     text: str
     speaker: Speaker = "orion"
     format: Literal["mp3", "wav"] = "mp3"
-    provider: Optional[Literal["auto", "elevenlabs", "openai"]] = "auto"
 
-# -------------------------------------------------
-# Helpers
-# -------------------------------------------------
-def pick_voice_ids(speaker: Speaker) -> Tuple[Optional[str], Optional[str]]:
-    """
-    Returns the (ElevenLabs voice ID, OpenAI voice alias)
-    for the given speaker.
-    """
+# ------- Voice Utilities -------
+async def elevenlabs_tts(text: str, voice_id: str, fmt: str) -> bytes:
+    api_key = os.getenv("ELEVENLABS_API_KEY")
+    if not api_key:
+        raise RuntimeError("ELEVENLABS_API_KEY missing")
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+    payload = {
+        "text": text,
+        "model_id": "eleven_multilingual_v2",
+        "voice_settings": {
+            "stability": 0.55,
+            "similarity_boost": 0.75,
+            "style": 0.2,
+            "use_speaker_boost": True
+        }
+    }
+    headers = {
+        "xi-api-key": api_key,
+        "Accept": "audio/mpeg" if fmt == "mp3" else "audio/wav",
+        "Content-Type": "application/json"
+    }
+    async with httpx.AsyncClient(timeout=60) as client:
+        r = await client.post(url, headers=headers, json=payload)
+        if r.status_code >= 400:
+            raise RuntimeError(f"ElevenLabs error {r.status_code}: {r.text}")
+        return r.content
+
+async def openai_tts(text: str, voice: str, fmt: str) -> bytes:
+    api_key = os.getenv("OPENAI_API_KEY")
+    model = os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY missing")
+    url = "https://api.openai.com/v1/audio/speech"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": model,
+        "voice": voice,
+        "input": text,
+        "format": "mp3" if fmt == "mp3" else "wav"
+    }
+    async with httpx.AsyncClient(timeout=60) as client:
+        r = await client.post(url, headers=headers, json=payload)
+        if r.status_code >= 400:
+            raise RuntimeError(f"OpenAI TTS error {r.status_code}: {r.text}")
+        return r.content
+
+def pick_voice_ids(speaker: str):
     if speaker == "orion":
         return (
             os.getenv("ELEVENLABS_VOICE_ORION"),
-            os.getenv("OPENAI_VOICE_ORION"),
-        )
-    elif speaker == "lyric":
-        return (
-            os.getenv("ELEVENLABS_VOICE_LYRIC"),
-            os.getenv("OPENAI_VOICE_LYRIC"),
+            os.getenv("OPENAI_VOICE_ORION", "alloy")
         )
     else:
-        raise ValueError(f"Unknown speaker: {speaker}")
-
-def media_type(fmt: str) -> str:
-    return "audio/mpeg" if fmt == "mp3" else "audio/wav"
-
-# -------------------------------------------------
-# Validation
-# -------------------------------------------------
-def validate_voice_map():
-    el_orion = os.getenv("ELEVENLABS_VOICE_ORION")
-    el_lyric = os.getenv("ELEVENLABS_VOICE_LYRIC")
-    oa_orion = os.getenv("OPENAI_VOICE_ORION")
-    oa_lyric = os.getenv("OPENAI_VOICE_LYRIC")
-
-    if el_orion and el_lyric and el_orion == el_lyric:
-        raise RuntimeError("ELEVENLABS voice IDs for Orion and Lyric must differ.")
-    if oa_orion and oa_lyric and oa_orion == oa_lyric:
-        raise RuntimeError("OPENAI voice aliases for Orion and Lyric must differ.")
-
-    print(
-        f"[voice-map] ORION → (EL:{el_orion or '-'}) / (OA:{oa_orion or '-'}) | "
-        f"LYRIC → (EL:{el_lyric or '-'}) / (OA:{oa_lyric or '-'})"
-    )
-
-validate_voice_map()
-
-# -------------------------------------------------
-# TTS Providers
-# -------------------------------------------------
-async def elevenlabs_tts(text: str, voice_id: str, fmt: str) -> bytes:
-    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
-    headers = {
-        "xi-api-key": os.getenv("ELEVENLABS_API_KEY"),
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "text": text,
-        "model_id": "eleven_monolingual_v1",
-        "voice_settings": {"stability": 0.5, "similarity_boost": 0.75},
-    }
-    async with httpx.AsyncClient(timeout=90.0) as client:
-        resp = await client.post(url, headers=headers, json=payload)
-        if resp.status_code != 200:
-            raise HTTPException(
-                status_code=500,
-                detail=f"ElevenLabs error {resp.status_code}: {resp.text}",
-            )
-        return resp.content
-
-async def openai_tts(text: str, voice: str, fmt: str) -> bytes:
-    from openai import AsyncOpenAI
-
-    client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-    response = await client.audio.speech.create(
-        model="gpt-4o-mini-tts",
-        voice=voice,
-        input=text,
-        format=fmt,
-    )
-    return await response.read()
-
-# -------------------------------------------------
-# Routes
-# -------------------------------------------------
-@app.get("/")
-async def root():
-    return {"status": "ok", "service": "LUX Loyalty Voice API"}
-
-@app.get("/health")
-async def health():
-    return {"status": "healthy"}
+        return (
+            os.getenv("ELEVENLABS_VOICE_LYRIC"),
+            os.getenv("OPENAI_VOICE_LYRIC", "verse")
+        )
 
 @app.post("/voice/speak")
 async def speak(req: SpeakRequest):
-    start = asyncio.get_event_loop().time()
-    fmt = req.format
-    content_type = media_type(fmt)
-    el_voice, oa_voice = pick_voice_ids(req.speaker)
+    # Try ElevenLabs first (if configured), else fallback to OpenAI TTS
+    eleven_id, openai_voice = pick_voice_ids(req.speaker)
 
-    # Force provider if specified
-    provider = req.provider or "auto"
-    data = None
+    data: Optional[bytes] = None
+    content_type = "audio/mpeg" if req.format == "mp3" else "audio/wav"
 
-    try:
-        if provider == "elevenlabs":
-            if not (os.getenv("ELEVENLABS_API_KEY") and el_voice):
-                raise HTTPException(400, detail="ElevenLabs not configured.")
-            data = await elevenlabs_tts(req.text, el_voice, fmt)
+    # Primary: ElevenLabs
+    if os.getenv("ELEVENLABS_API_KEY") and eleven_id:
+        try:
+            data = await elevenlabs_tts(req.text, eleven_id, req.format)
+        except Exception as e:
+            # fall through to OpenAI
+            data = None
 
-        elif provider == "openai":
-            if not os.getenv("OPENAI_API_KEY"):
-                raise HTTPException(400, detail="OpenAI not configured.")
-            data = await openai_tts(req.text, oa_voice, fmt)
+    # Fallback: OpenAI
+    if data is None:
+        if not os.getenv("OPENAI_API_KEY"):
+            raise HTTPException(status_code=500, detail="No TTS providers available (configure ElevenLabs or OpenAI).")
+        data = await openai_tts(req.text, openai_voice, req.format)
 
-        else:  # auto
-            if os.getenv("ELEVENLABS_API_KEY") and el_voice:
-                try:
-                    data = await elevenlabs_tts(req.text, el_voice, fmt)
-                except Exception as e:
-                    print(f"[warn] ElevenLabs failed, falling back: {e}")
-                    data = None
-
-            if data is None:
-                if not os.getenv("OPENAI_API_KEY"):
-                    raise HTTPException(
-                        500,
-                        detail="No TTS providers available (configure ElevenLabs or OpenAI).",
-                    )
-                data = await openai_tts(req.text, oa_voice, fmt)
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-    duration = round(asyncio.get_event_loop().time() - start, 2)
-    print(
-        f"[voice] {req.speaker.upper()} via {provider} → {fmt} ({len(data)} bytes in {duration}s)"
-    )
     return StreamingResponse(iter([data]), media_type=content_type)
 
-# -------------------------------------------------
-# Optional: lightweight keepalive to Supabase or other
-# -------------------------------------------------
+# ------- Supabase Keepalive (optional) -------
+async def supabase_keepalive():
+    supa_url = os.getenv("SUPABASE_URL")
+    supa_key = os.getenv("SUPABASE_ANON_KEY")
+    if not supa_url or not supa_key:
+        return
+    health_url = f"{supa_url.rstrip('/')}/auth/v1/health"
+    headers = {"apikey": supa_key}
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            await client.get(health_url, headers=headers)
+    except Exception:
+        pass
+
+async def keepalive_loop():
+    while True:
+        await supabase_keepalive()
+        await asyncio.sleep(6 * 60 * 60)  # every 6 hours
+
 @app.on_event("startup")
-async def startup():
-    print("Service started and ready for voice synthesis.")
+async def on_startup():
+    asyncio.create_task(keepalive_loop())
