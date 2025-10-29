@@ -1,12 +1,15 @@
 {
   "version": "1.0",
-  "description": "Frontend and AI behavioral schema for Exclusivity loyalty tiers. Defines tone, visuals, and nudge phrasing.",
+  "meta": {
+    "description": "Frontend and AI behavioral schema for Exclusivity loyalty tiers",
+    "note": "Defines tone, visuals, and nudge phrasing for Orion and Lyric."
+  },
   "tiers": [
     {
       "tier_id": "Tier_1_Essential",
       "display_label": "Essential",
       "visual_style": {
-        "accent_color": "#D4AF37", // warm gold to symbolize attainable luxury
+        "accent_color": "#D4AF37",
         "badge_icon": "feather-light",
         "aura_animation": "subtle_glow"
       },
@@ -22,7 +25,7 @@
       "tier_id": "Tier_2_Signature",
       "display_label": "Signature",
       "visual_style": {
-        "accent_color": "#E5C100", // rich gold gradient for elevated prestige
+        "accent_color": "#E5C100",
         "badge_icon": "quill",
         "aura_animation": "elegant_wave"
       },
@@ -38,7 +41,7 @@
       "tier_id": "Tier_3_Prestige",
       "display_label": "Prestige",
       "visual_style": {
-        "accent_color": "#C0C0C0", // platinum
+        "accent_color": "#C0C0C0",
         "badge_icon": "crown",
         "aura_animation": "regal_ripple"
       },
@@ -54,7 +57,7 @@
       "tier_id": "Tier_4_Sovereign",
       "display_label": "Sovereign",
       "visual_style": {
-        "accent_color": "#E5E4E2", // diamond white
+        "accent_color": "#E5E4E2",
         "badge_icon": "infinity",
         "aura_animation": "radiant_flare"
       },
