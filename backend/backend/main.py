@@ -1,43 +1,45 @@
 import os
 import asyncio
-from typing import Optional, Literal
-from fastapi import FastAPI, HTTPException, Response
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import PlainTextResponse, StreamingResponse, JSONResponse
-from pydantic import BaseModel
-import httpx
 import json
+import httpx
+from typing import Optional, Literal
+from datetime import datetime
+from fastapi import FastAPI, HTTPException, Response
+from fastapi.responses import PlainTextResponse, StreamingResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 # ==============================================================
-#  CONFIG & APP
+#  APP INITIALIZATION
 # ==============================================================
-ENV = os.getenv("ENVIRONMENT", "production")
-ALLOW_ORIGINS = os.getenv("ALLOW_ORIGINS", "*")
 
-app = FastAPI(title="Exclusivity Backend", version="6.0")
+app = FastAPI(title="Exclusivity Backend", version="6.1")
 
+# Allow all origins by default (safe for current stack; restrict later if needed)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[o.strip() for o in ALLOW_ORIGINS.split(",")] if ALLOW_ORIGINS else ["*"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # ==============================================================
-#  HEALTH ENDPOINTS
+#  HEALTH & ROOT ENDPOINTS
 # ==============================================================
+
 @app.get("/", response_class=PlainTextResponse)
 async def root():
-    return "OK - Exclusivity Backend v6.0"
+    return "OK - Exclusivity Backend v6.1"
 
 @app.get("/health", response_class=JSONResponse)
 async def health():
-    return {"status": "ok", "version": "6.0"}
+    return {"status": "ok", "version": "6.1", "environment": os.getenv("ENVIRONMENT", "production")}
 
 # ==============================================================
 #  MODELS
 # ==============================================================
+
 Speaker = Literal["orion", "lyric"]
 
 class SpeakRequest(BaseModel):
@@ -46,8 +48,9 @@ class SpeakRequest(BaseModel):
     format: Literal["mp3", "wav"] = "mp3"
 
 # ==============================================================
-#  VOICE UTILITIES
+#  VOICE UTILITIES (ELEVENLABS + OPENAI)
 # ==============================================================
+
 async def elevenlabs_tts(text: str, voice_id: str, fmt: str) -> bytes:
     api_key = os.getenv("ELEVENLABS_API_KEY")
     if not api_key:
@@ -76,16 +79,15 @@ async def elevenlabs_tts(text: str, voice_id: str, fmt: str) -> bytes:
 
 async def openai_tts(text: str, voice: str, fmt: str) -> bytes:
     api_key = os.getenv("OPENAI_API_KEY")
-    model = os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts")
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY missing")
     url = "https://api.openai.com/v1/audio/speech"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     payload = {
-        "model": model,
+        "model": os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts"),
         "voice": voice,
         "input": text,
-        "format": "mp3" if fmt == "mp3" else "wav"
+        "format": fmt
     }
     async with httpx.AsyncClient(timeout=60) as client:
         r = await client.post(url, headers=headers, json=payload)
@@ -108,6 +110,7 @@ def pick_voice_ids(speaker: str):
 # ==============================================================
 #  SPEAK ENDPOINT
 # ==============================================================
+
 @app.post("/voice/speak")
 async def speak(req: SpeakRequest):
     eleven_id, openai_voice = pick_voice_ids(req.speaker)
@@ -118,7 +121,8 @@ async def speak(req: SpeakRequest):
     if os.getenv("ELEVENLABS_API_KEY") and eleven_id:
         try:
             data = await elevenlabs_tts(req.text, eleven_id, req.format)
-        except Exception:
+        except Exception as e:
+            print(f"[WARN] ElevenLabs failed: {e}")
             data = None
 
     # Fallback: OpenAI
@@ -130,25 +134,43 @@ async def speak(req: SpeakRequest):
     return StreamingResponse(iter([data]), media_type=content_type)
 
 # ==============================================================
-#  TIERS ENDPOINT (Read-Only)
+#  TIERS CONFIG UTILITIES
 # ==============================================================
-def load_json(path: str):
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_DIR = os.path.join(BASE_DIR, "config")
+
+def load_json(filename: str):
+    path = os.path.join(CONFIG_DIR, filename)
     try:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception as e:
-        print(f"Error loading {path}: {e}")
+        print(f"[WARN] Error loading {filename}: {e}")
         return None
+
+# Cache configs in memory for performance
+TIERS_CACHE = {
+    "backend": load_json("tiers.json"),
+    "ui": load_json("tiers_ui.json"),
+    "last_loaded": datetime.utcnow()
+}
+
+def reload_tiers():
+    """Refreshes cached tier data from disk (used by /tiers/reload)."""
+    TIERS_CACHE["backend"] = load_json("tiers.json")
+    TIERS_CACHE["ui"] = load_json("tiers_ui.json")
+    TIERS_CACHE["last_loaded"] = datetime.utcnow()
+    print("[INFO] Tier configuration reloaded from disk.")
+
+# ==============================================================
+#  TIERS ENDPOINTS
+# ==============================================================
 
 @app.get("/tiers", response_class=JSONResponse)
 async def get_tiers():
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    config_dir = os.path.join(base_dir, "config")
-    backend_path = os.path.join(config_dir, "tiers.json")
-    ui_path = os.path.join(config_dir, "tiers_ui.json")
-
-    backend_data = load_json(backend_path)
-    ui_data = load_json(ui_path)
+    backend_data = TIERS_CACHE["backend"]
+    ui_data = TIERS_CACHE["ui"]
 
     if not backend_data or not ui_data:
         raise HTTPException(status_code=500, detail="Tier configuration not found or invalid.")
@@ -156,12 +178,38 @@ async def get_tiers():
     return {
         "version": backend_data.get("version", "1.0"),
         "tiers_backend": backend_data.get("tiers", []),
-        "tiers_ui": ui_data.get("tiers", [])
+        "tiers_ui": ui_data.get("tiers", []),
+        "last_loaded": TIERS_CACHE["last_loaded"].isoformat() + "Z"
     }
 
+@app.get("/tiers/version", response_class=JSONResponse)
+async def get_tiers_version():
+    backend_data = TIERS_CACHE["backend"]
+    if not backend_data:
+        raise HTTPException(status_code=500, detail="Tier configuration unavailable.")
+    version = backend_data.get("version", "1.0")
+    config_dir = CONFIG_DIR
+    try:
+        backend_mtime = os.path.getmtime(os.path.join(config_dir, "tiers.json"))
+        ui_mtime = os.path.getmtime(os.path.join(config_dir, "tiers_ui.json"))
+        last_updated = max(backend_mtime, ui_mtime)
+    except Exception:
+        last_updated = TIERS_CACHE["last_loaded"].timestamp()
+    return {
+        "version": version,
+        "last_updated": datetime.utcfromtimestamp(last_updated).isoformat() + "Z"
+    }
+
+@app.post("/tiers/reload", response_class=PlainTextResponse)
+async def reload_tiers_route():
+    """Manual reload of tier configuration files."""
+    reload_tiers()
+    return f"Tier configuration reloaded at {TIERS_CACHE['last_loaded'].isoformat()}Z"
+
 # ==============================================================
-#  SUPABASE KEEPALIVE (Optional)
+#  SUPABASE KEEPALIVE (PREVENTS IDLE TIMEOUT)
 # ==============================================================
+
 async def supabase_keepalive():
     supa_url = os.getenv("SUPABASE_URL")
     supa_key = os.getenv("SUPABASE_ANON_KEY")
@@ -183,3 +231,4 @@ async def keepalive_loop():
 @app.on_event("startup")
 async def on_startup():
     asyncio.create_task(keepalive_loop())
+    print("[INFO] Exclusivity Backend v6.1 started successfully.")
