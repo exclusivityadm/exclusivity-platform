@@ -4,7 +4,7 @@ import json
 import httpx
 from typing import Optional, Literal
 from datetime import datetime
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import PlainTextResponse, StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -13,9 +13,8 @@ from pydantic import BaseModel
 #  APP INITIALIZATION
 # ==============================================================
 
-app = FastAPI(title="Exclusivity Backend", version="6.1")
+app = FastAPI(title="Exclusivity Backend", version="6.2")
 
-# Allow all origins by default (safe for current stack; restrict later if needed)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -30,11 +29,15 @@ app.add_middleware(
 
 @app.get("/", response_class=PlainTextResponse)
 async def root():
-    return "OK - Exclusivity Backend v6.1"
+    return "OK - Exclusivity Backend v6.2"
 
 @app.get("/health", response_class=JSONResponse)
 async def health():
-    return {"status": "ok", "version": "6.1", "environment": os.getenv("ENVIRONMENT", "production")}
+    return {
+        "status": "ok",
+        "version": "6.2",
+        "environment": os.getenv("ENVIRONMENT", "production")
+    }
 
 # ==============================================================
 #  MODELS
@@ -48,7 +51,7 @@ class SpeakRequest(BaseModel):
     format: Literal["mp3", "wav"] = "mp3"
 
 # ==============================================================
-#  VOICE UTILITIES (ELEVENLABS + OPENAI)
+#  VOICE UTILITIES
 # ==============================================================
 
 async def elevenlabs_tts(text: str, voice_id: str, fmt: str) -> bytes:
@@ -117,7 +120,6 @@ async def speak(req: SpeakRequest):
     data: Optional[bytes] = None
     content_type = "audio/mpeg" if req.format == "mp3" else "audio/wav"
 
-    # Primary: ElevenLabs
     if os.getenv("ELEVENLABS_API_KEY") and eleven_id:
         try:
             data = await elevenlabs_tts(req.text, eleven_id, req.format)
@@ -125,7 +127,6 @@ async def speak(req: SpeakRequest):
             print(f"[WARN] ElevenLabs failed: {e}")
             data = None
 
-    # Fallback: OpenAI
     if data is None:
         if not os.getenv("OPENAI_API_KEY"):
             raise HTTPException(status_code=500, detail="No TTS providers available (configure ElevenLabs or OpenAI).")
@@ -139,27 +140,36 @@ async def speak(req: SpeakRequest):
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_DIR = os.path.join(BASE_DIR, "config")
+MANIFEST_PATH = os.path.join(CONFIG_DIR, "tiers_manifest.json")
 
-def load_json(filename: str):
-    path = os.path.join(CONFIG_DIR, filename)
+def load_json(path: str):
     try:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception as e:
-        print(f"[WARN] Error loading {filename}: {e}")
+        print(f"[WARN] Error loading {path}: {e}")
         return None
 
-# Cache configs in memory for performance
+def load_manifest():
+    """Read manifest file if present."""
+    if not os.path.exists(MANIFEST_PATH):
+        return None
+    try:
+        with open(MANIFEST_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"[WARN] Could not read manifest: {e}")
+        return None
+
 TIERS_CACHE = {
-    "backend": load_json("tiers.json"),
-    "ui": load_json("tiers_ui.json"),
+    "backend": load_json(os.path.join(CONFIG_DIR, "tiers.json")),
+    "ui": load_json(os.path.join(CONFIG_DIR, "tiers_ui.json")),
     "last_loaded": datetime.utcnow()
 }
 
 def reload_tiers():
-    """Refreshes cached tier data from disk (used by /tiers/reload)."""
-    TIERS_CACHE["backend"] = load_json("tiers.json")
-    TIERS_CACHE["ui"] = load_json("tiers_ui.json")
+    TIERS_CACHE["backend"] = load_json(os.path.join(CONFIG_DIR, "tiers.json"))
+    TIERS_CACHE["ui"] = load_json(os.path.join(CONFIG_DIR, "tiers_ui.json"))
     TIERS_CACHE["last_loaded"] = datetime.utcnow()
     print("[INFO] Tier configuration reloaded from disk.")
 
@@ -184,30 +194,43 @@ async def get_tiers():
 
 @app.get("/tiers/version", response_class=JSONResponse)
 async def get_tiers_version():
+    """
+    Returns manifest data if available; otherwise falls back
+    to legacy version/timestamp calculation.
+    """
+    manifest = load_manifest()
+    if manifest:
+        return {
+            "version": manifest["backend"]["version"],
+            "generated_at": manifest["generated_at"],
+            "status": manifest["status"],
+            "backend_checksum": manifest["backend"]["checksum"],
+            "frontend_checksum": manifest["frontend"]["checksum"]
+        }
+
     backend_data = TIERS_CACHE["backend"]
-    if not backend_data:
-        raise HTTPException(status_code=500, detail="Tier configuration unavailable.")
-    version = backend_data.get("version", "1.0")
-    config_dir = CONFIG_DIR
+    version = backend_data.get("version", "1.0") if backend_data else "unknown"
+
     try:
-        backend_mtime = os.path.getmtime(os.path.join(config_dir, "tiers.json"))
-        ui_mtime = os.path.getmtime(os.path.join(config_dir, "tiers_ui.json"))
+        backend_mtime = os.path.getmtime(os.path.join(CONFIG_DIR, "tiers.json"))
+        ui_mtime = os.path.getmtime(os.path.join(CONFIG_DIR, "tiers_ui.json"))
         last_updated = max(backend_mtime, ui_mtime)
     except Exception:
         last_updated = TIERS_CACHE["last_loaded"].timestamp()
+
     return {
         "version": version,
-        "last_updated": datetime.utcfromtimestamp(last_updated).isoformat() + "Z"
+        "last_updated": datetime.utcfromtimestamp(last_updated).isoformat() + "Z",
+        "manifest_found": False
     }
 
 @app.post("/tiers/reload", response_class=PlainTextResponse)
 async def reload_tiers_route():
-    """Manual reload of tier configuration files."""
     reload_tiers()
     return f"Tier configuration reloaded at {TIERS_CACHE['last_loaded'].isoformat()}Z"
 
 # ==============================================================
-#  SUPABASE KEEPALIVE (PREVENTS IDLE TIMEOUT)
+#  SUPABASE KEEPALIVE
 # ==============================================================
 
 async def supabase_keepalive():
@@ -226,9 +249,9 @@ async def supabase_keepalive():
 async def keepalive_loop():
     while True:
         await supabase_keepalive()
-        await asyncio.sleep(6 * 60 * 60)  # every 6 hours
+        await asyncio.sleep(6 * 60 * 60)
 
 @app.on_event("startup")
 async def on_startup():
     asyncio.create_task(keepalive_loop())
-    print("[INFO] Exclusivity Backend v6.1 started successfully.")
+    print("[INFO] Exclusivity Backend v6.2 started successfully.")
