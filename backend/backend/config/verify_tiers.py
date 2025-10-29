@@ -2,12 +2,16 @@
 verify_tiers.py
 ----------------
 Local verification tool for Exclusivity tier configuration files.
-Ensures that tiers.json and tiers_ui.json are valid JSON, have the required
-keys, and maintain backend/frontend alignment before deployment.
+Ensures that tiers.json and tiers_ui.json are valid JSON, structurally sound,
+and backend/frontend tier IDs are perfectly aligned.
+
+Also generates SHA-256 checksums so Orion/Lyric or monitoring scripts
+can verify cached tier data integrity without full re-download.
 """
 
 import os
 import json
+import hashlib
 from datetime import datetime
 
 # -------------------------------------------------------------------
@@ -18,9 +22,10 @@ BACKEND_PATH = os.path.join(BASE_DIR, "tiers.json")
 UI_PATH = os.path.join(BASE_DIR, "tiers_ui.json")
 
 # -------------------------------------------------------------------
-# VALIDATION UTILITIES
+# UTILITY FUNCTIONS
 # -------------------------------------------------------------------
 def load_json(path):
+    """Load and validate JSON from a file."""
     try:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
@@ -31,7 +36,18 @@ def load_json(path):
         print(f"⚠️ File not found: {path}")
         return None
 
+def compute_checksum(path):
+    """Compute a SHA-256 checksum of file contents."""
+    try:
+        with open(path, "rb") as f:
+            content = f.read()
+        return hashlib.sha256(content).hexdigest()
+    except Exception as e:
+        print(f"⚠️ Could not compute checksum for {path}: {e}")
+        return "unknown"
+
 def validate_tier_structure(tier, source):
+    """Ensure each tier object has required fields."""
     required_fields = ["tier_id", "label" if source == "backend" else "display_label"]
     missing = [f for f in required_fields if f not in tier]
     if missing:
@@ -40,14 +56,19 @@ def validate_tier_structure(tier, source):
     return True
 
 def compare_tier_alignment(backend_data, ui_data):
+    """Check backend ↔ UI tier ID alignment."""
     backend_ids = {t["tier_id"] for t in backend_data.get("tiers", [])}
     ui_ids = {t["tier_id"] for t in ui_data.get("tiers", [])}
     if backend_ids != ui_ids:
-        print(f"⚠️ Tier mismatch detected:")
-        print(f"   Backend only: {backend_ids - ui_ids}")
-        print(f"   Frontend only: {ui_ids - backend_ids}")
+        print("⚠️ Tier mismatch detected:")
+        if backend_ids - ui_ids:
+            print(f"   Backend only: {backend_ids - ui_ids}")
+        if ui_ids - backend_ids:
+            print(f"   Frontend only: {ui_ids - backend_ids}")
+        return False
     else:
         print("✅ Backend and UI tier IDs are perfectly aligned.")
+        return True
 
 # -------------------------------------------------------------------
 # MAIN VALIDATION
@@ -62,10 +83,15 @@ def main():
         print("❌ Verification aborted due to invalid JSON.")
         return
 
-    print(f"✅ Loaded tiers.json (version {backend.get('version', 'unknown')})")
-    print(f"✅ Loaded tiers_ui.json (version {ui.get('version', 'unknown')})")
+    backend_checksum = compute_checksum(BACKEND_PATH)
+    ui_checksum = compute_checksum(UI_PATH)
 
-    # Check structures
+    print(f"✅ Loaded tiers.json (version {backend.get('version', 'unknown')})")
+    print(f"   SHA-256: {backend_checksum}")
+    print(f"✅ Loaded tiers_ui.json (version {ui.get('version', 'unknown')})")
+    print(f"   SHA-256: {ui_checksum}\n")
+
+    # Validate structure
     all_good = True
     for tier in backend.get("tiers", []):
         if not validate_tier_structure(tier, "backend"):
@@ -79,14 +105,24 @@ def main():
     else:
         print("⚠️ Some tiers have missing required fields. Please review above messages.")
 
-    # Cross-compare backend ↔ UI
-    compare_tier_alignment(backend, ui)
+    # Compare alignment
+    aligned = compare_tier_alignment(backend, ui)
 
-    # Success summary
-    if all_good:
-        print(f"\n🎉 Verification complete — {len(backend['tiers'])} tiers validated successfully at {datetime.utcnow().isoformat()}Z\n")
+    # Summary
+    now = datetime.utcnow().isoformat() + "Z"
+    print("\n───────────────────────────────────────────────")
+    print(f"Verification completed at {now}")
+    print(f"Backend tiers: {len(backend.get('tiers', []))}")
+    print(f"Frontend tiers: {len(ui.get('tiers', []))}")
+    print(f"Backend checksum: {backend_checksum[:16]}...")
+    print(f"Frontend checksum: {ui_checksum[:16]}...")
+    print("Status:", end=" ")
+
+    if all_good and aligned:
+        print("🎉 All checks passed successfully!")
     else:
-        print(f"\n⚠️ Verification completed with issues at {datetime.utcnow().isoformat()}Z\n")
+        print("⚠️ Review issues above before committing.")
+    print("───────────────────────────────────────────────\n")
 
 if __name__ == "__main__":
     main()
