@@ -1,0 +1,133 @@
+{
+  "version": "1.0",
+  "description": "Backend operational schema for Exclusivity loyalty tiers. Defines pricing, capabilities, and upgrade triggers.",
+  "tiers": [
+    {
+      "tier_id": "Tier_1_Essential",
+      "label": "Essential",
+      "price_usd": 49,
+      // Broad automation with limited depth; built to impress and encourage organic referrals.
+      "automation_limits": {
+        "max_campaigns": 10,
+        "analytics_depth": "basic",
+        "ai_persona_training": false,
+        "multi_store_support": false
+      },
+      "upgrade_triggers": [
+        {
+          "metric": "members_count",
+          "threshold": 1000,
+          "suggested_tier": "Tier_2_Signature"
+        },
+        {
+          "metric": "campaigns_run",
+          "threshold": 5,
+          "suggested_tier": "Tier_2_Signature"
+        }
+      ],
+      "referral_incentives": {
+        "badge_title": "Mentor Merchant",
+        "token_bonus": 100,
+        "automation_boost": 1.1
+      },
+      "included_features": [
+        "Core loyalty tokens and tiers",
+        "Shopify + Privy integration",
+        "Automated customer onboarding flows",
+        "Weekly performance snapshot",
+        "Dormant member reactivation automation"
+      ]
+    },
+    {
+      "tier_id": "Tier_2_Signature",
+      "label": "Signature",
+      "price_usd": 149,
+      // Refined AI and customizable automation depth.
+      "automation_limits": {
+        "max_campaigns": 25,
+        "analytics_depth": "advanced",
+        "ai_persona_training": true,
+        "multi_store_support": false
+      },
+      "upgrade_triggers": [
+        {
+          "metric": "members_count",
+          "threshold": 5000,
+          "suggested_tier": "Tier_3_Prestige"
+        },
+        {
+          "metric": "stores_connected",
+          "threshold": 2,
+          "suggested_tier": "Tier_3_Prestige"
+        }
+      ],
+      "referral_incentives": {
+        "badge_title": "Curator Merchant",
+        "token_bonus": 250,
+        "automation_boost": 1.25
+      },
+      "included_features": [
+        "Full theme synchronization",
+        "Tier Narrative Builder",
+        "Automated campaign studio",
+        "Predictive loyalty analytics",
+        "Priority AI support and onboarding assistance"
+      ]
+    },
+    {
+      "tier_id": "Tier_3_Prestige",
+      "label": "Prestige",
+      "price_usd": 499,
+      // Personalized brand-trained AI twins and enterprise orchestration.
+      "automation_limits": {
+        "max_campaigns": 100,
+        "analytics_depth": "predictive",
+        "ai_persona_training": true,
+        "multi_store_support": true
+      },
+      "upgrade_triggers": [
+        {
+          "metric": "stores_connected",
+          "threshold": 5,
+          "suggested_tier": "Tier_4_Sovereign"
+        }
+      ],
+      "referral_incentives": {
+        "badge_title": "Maison Partner",
+        "token_bonus": 500,
+        "automation_boost": 1.5
+      },
+      "included_features": [
+        "Multi-store management",
+        "Custom AI twin training",
+        "Cross-store analytics and loyalty mapping",
+        "White-label domain dashboard",
+        "Quarterly growth strategy review"
+      ]
+    },
+    {
+      "tier_id": "Tier_4_Sovereign",
+      "label": "Sovereign",
+      "price_usd": "Custom",
+      // Flagship partner level; bespoke modules and AI infrastructure.
+      "automation_limits": {
+        "max_campaigns": "unlimited",
+        "analytics_depth": "enterprise",
+        "ai_persona_training": true,
+        "multi_store_support": true
+      },
+      "referral_incentives": {
+        "badge_title": "Flagship Collaborator",
+        "token_bonus": 1000,
+        "automation_boost": 2.0
+      },
+      "included_features": [
+        "Exclusive AI infrastructure co-development",
+        "Event and pop-up activation systems",
+        "Cross-brand collaboration engine",
+        "Dedicated concierge and SLA support",
+        "Access to experimental modules"
+      ]
+    }
+  ]
+}
