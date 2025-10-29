@@ -1,0 +1,70 @@
+{
+  "version": "1.0",
+  "description": "Frontend and AI behavioral schema for Exclusivity loyalty tiers. Defines tone, visuals, and nudge phrasing.",
+  "tiers": [
+    {
+      "tier_id": "Tier_1_Essential",
+      "display_label": "Essential",
+      "visual_style": {
+        "accent_color": "#D4AF37", // warm gold to symbolize attainable luxury
+        "badge_icon": "feather-light",
+        "aura_animation": "subtle_glow"
+      },
+      "orion_tone": "encouraging and visionary",
+      "lyric_tone": "refined and empathetic",
+      "nudge_messages": [
+        "You’ve built a strong foundation — let’s refine it further with Signature.",
+        "Your automations are performing beautifully; imagine what full control could do."
+      ],
+      "tier_summary": "Effortless brilliance — broad automation and polished simplicity for boutique brands."
+    },
+    {
+      "tier_id": "Tier_2_Signature",
+      "display_label": "Signature",
+      "visual_style": {
+        "accent_color": "#E5C100", // rich gold gradient for elevated prestige
+        "badge_icon": "quill",
+        "aura_animation": "elegant_wave"
+      },
+      "orion_tone": "collaborative and confident",
+      "lyric_tone": "sophisticated and poised",
+      "nudge_messages": [
+        "You’ve defined your brand voice — Prestige can make it resonate across every channel.",
+        "Your growth curve is remarkable; shall we explore orchestration-level analytics?"
+      ],
+      "tier_summary": "Curated intelligence — refined control, predictive analytics, and tone alignment."
+    },
+    {
+      "tier_id": "Tier_3_Prestige",
+      "display_label": "Prestige",
+      "visual_style": {
+        "accent_color": "#C0C0C0", // platinum
+        "badge_icon": "crown",
+        "aura_animation": "regal_ripple"
+      },
+      "orion_tone": "advisory and strategic",
+      "lyric_tone": "luxurious and assured",
+      "nudge_messages": [
+        "Your scale deserves orchestration — Sovereign turns your brand into a movement.",
+        "You’ve achieved mastery; the next step is innovation through collaboration."
+      ],
+      "tier_summary": "The Maison tier — enterprise orchestration and brand-trained intelligence."
+    },
+    {
+      "tier_id": "Tier_4_Sovereign",
+      "display_label": "Sovereign",
+      "visual_style": {
+        "accent_color": "#E5E4E2", // diamond white
+        "badge_icon": "infinity",
+        "aura_animation": "radiant_flare"
+      },
+      "orion_tone": "executive and visionary",
+      "lyric_tone": "elegant and deeply personalized",
+      "nudge_messages": [
+        "Few brands reach this echelon — let’s co-create what doesn’t exist yet.",
+        "You’re defining the standard others will follow."
+      ],
+      "tier_summary": "Flagship partnership — bespoke AI systems, concierge service, and infinite collaboration."
+    }
+  ]
+}
