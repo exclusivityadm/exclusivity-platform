@@ -1,12 +1,14 @@
 {
   "version": "1.0",
-  "description": "Backend operational schema for Exclusivity loyalty tiers. Defines pricing, capabilities, and upgrade triggers.",
+  "meta": {
+    "description": "Backend operational schema for Exclusivity loyalty tiers",
+    "note": "Do not edit tier_id values; they link backend and frontend data."
+  },
   "tiers": [
     {
       "tier_id": "Tier_1_Essential",
       "label": "Essential",
       "price_usd": 49,
-      // Broad automation with limited depth; built to impress and encourage organic referrals.
       "automation_limits": {
         "max_campaigns": 10,
         "analytics_depth": "basic",
@@ -42,7 +44,6 @@
       "tier_id": "Tier_2_Signature",
       "label": "Signature",
       "price_usd": 149,
-      // Refined AI and customizable automation depth.
       "automation_limits": {
         "max_campaigns": 25,
         "analytics_depth": "advanced",
@@ -78,7 +79,6 @@
       "tier_id": "Tier_3_Prestige",
       "label": "Prestige",
       "price_usd": 499,
-      // Personalized brand-trained AI twins and enterprise orchestration.
       "automation_limits": {
         "max_campaigns": 100,
         "analytics_depth": "predictive",
@@ -109,7 +109,6 @@
       "tier_id": "Tier_4_Sovereign",
       "label": "Sovereign",
       "price_usd": "Custom",
-      // Flagship partner level; bespoke modules and AI infrastructure.
       "automation_limits": {
         "max_campaigns": "unlimited",
         "analytics_depth": "enterprise",
