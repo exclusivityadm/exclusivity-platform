@@ -46,7 +46,7 @@ class SpeakRequest(BaseModel):
 # Replace these IDs with your actual ElevenLabs voice IDs
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
 ELEVENLABS_VOICE_ORION = "CGhTDelcmik3E17Nrvcf"
-ELEVENLABS_VOICE_LYRIC = "rujGCruvEqncqHTi6l0q"
+ELEVENLABS_VOICE_LYRIC = "kdmDKE6EkgrWrrykO9Qt"
 
 def get_voice_id(speaker: Speaker) -> str:
     if speaker == "orion":
