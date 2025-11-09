@@ -1,72 +1,59 @@
-# apps/backend/main.py
-"""
-Main entrypoint for Exclusivity Backend (Phase 2 Stable Build)
-Now includes runtime patch to suppress the 'ClientConnection' import error
-caused by Supabase Realtime + websockets >=12.0.
-"""
-
-import sys
-import types
-import logging
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from dotenv import load_dotenv
-import os
+from fastapi.responses import JSONResponse
 
-# -------------------------------------------------------------------
-# STEP 1 — Runtime patch for Supabase websocket import error
-# -------------------------------------------------------------------
-try:
-    import websockets
-    # Create a shim so anything trying to import websockets.legacy.client works
-    if not hasattr(websockets, "legacy"):
-        legacy = types.SimpleNamespace()
-        client = types.SimpleNamespace(ClientConnection=getattr(websockets.client, "ClientConnection", object))
-        legacy.client = client
-        websockets.legacy = legacy
-        sys.modules["websockets.legacy"] = legacy
-        sys.modules["websockets.legacy.client"] = client
-except Exception as e:
-    logging.warning(f"WebSocket shim patch skipped: {e}")
+# Route imports
+from apps.backend.routes import health, supabase, blockchain, voice
 
-# -------------------------------------------------------------------
-# STEP 2 — Load environment variables
-# -------------------------------------------------------------------
-load_dotenv()
+# Initialize FastAPI app
+app = FastAPI(
+    title="Exclusivity Backend",
+    version="1.0.0",
+    description="Core backend API for Exclusivity merchant console.",
+)
 
-# -------------------------------------------------------------------
-# STEP 3 — Initialize FastAPI app
-# -------------------------------------------------------------------
-app = FastAPI(title="Exclusivity Backend", version="2.0", docs_url="/docs")
+# --- CORS CONFIG ---
+frontend_url = os.getenv("FRONTEND_URL", "https://exclusivity-platform.vercel.app")
+origins = [
+    frontend_url,
+    "http://localhost:3000",
+    "https://exclusivity-platform.vercel.app",
+    "https://exclusivity.vip",
+]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # can restrict later
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# -------------------------------------------------------------------
-# STEP 4 — Import routes AFTER patch + app init
-# -------------------------------------------------------------------
-from apps.backend.routes import health, supabase, blockchain, voice
+# --- ROUTES ---
+app.include_router(health.router)
+app.include_router(supabase.router)
+app.include_router(blockchain.router)
+app.include_router(voice.router)
 
-app.include_router(health.router, prefix="/health", tags=["Health"])
-app.include_router(supabase.router, prefix="/supabase", tags=["Supabase"])
-app.include_router(blockchain.router, prefix="/blockchain", tags=["Blockchain"])
-app.include_router(voice.router, prefix="/voice", tags=["Voice"])
 
-# -------------------------------------------------------------------
-# STEP 5 — Root endpoint
-# -------------------------------------------------------------------
+# --- ROOT ROUTE ---
 @app.get("/")
-def root():
-    return {"status": "online", "environment": os.getenv("ENVIRONMENT", "production")}
+async def root():
+    """Base landing endpoint."""
+    return JSONResponse(
+        content={
+            "app": "Exclusivity Backend",
+            "status": "online",
+            "routes": ["/health", "/supabase/check", "/blockchain/status", "/voice/orion", "/voice/lyric"],
+        }
+    )
 
-# -------------------------------------------------------------------
-# STEP 6 — Local dev runner
-# -------------------------------------------------------------------
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("apps.backend.main:app", host="0.0.0.0", port=10000, reload=True)
+
+# --- ERROR HANDLER ---
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    return JSONResponse(
+        status_code=500,
+        content={"error": str(exc), "path": str(request.url)},
+    )
