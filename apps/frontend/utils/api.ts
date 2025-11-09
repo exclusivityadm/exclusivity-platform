@@ -1,49 +1,63 @@
-/**
- * Unified API client for Exclusivity Frontend
- * Automatically normalizes route paths and handles backend connection
- */
-const BACKEND_URL =
-  process.env.NEXT_PUBLIC_BACKEND_URL?.replace(/\/$/, "") || "http://localhost:10000";
+// apps/frontend/utils/api.ts
+
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "https://exclusivity-backend.onrender.com";
 
 /**
- * Normalizes fetch paths (removes leading /api if present)
+ * Helper to normalize request paths (avoiding double slashes)
  */
 function normalizePath(path: string): string {
-  if (path.startsWith("/api/")) path = path.replace("/api/", "/");
   if (!path.startsWith("/")) path = "/" + path;
-  return path;
+  return BACKEND_URL + path;
 }
 
-export async function apiFetch<T = any>(
-  path: string,
-  options: RequestInit = {}
-): Promise<T> {
-  const normalizedPath = normalizePath(path);
-  const url = `${BACKEND_URL}${normalizedPath}`;
+/**
+ * Generic API fetcher with automatic error handling
+ */
+export async function apiFetch(path: string, options: RequestInit = {}) {
+  const url = normalizePath(path);
+
   try {
-    const res = await fetch(url, {
-      ...options,
+    const response = await fetch(url, {
       headers: {
         "Content-Type": "application/json",
-        ...(options.headers || {}),
       },
+      ...options,
     });
-    if (!res.ok) {
-      console.error("API error:", res.status, await res.text());
-      throw new Error(`API request failed: ${res.status}`);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`❌ API ${url} failed: ${response.status} ${errorText}`);
+      return { error: `Error ${response.status}` };
     }
-    const contentType = res.headers.get("content-type");
-    if (contentType?.includes("application/json")) return res.json();
-    return (await res.text()) as unknown as T;
+
+    return await response.json();
   } catch (err) {
-    console.error("Failed to fetch:", path, err);
-    throw err;
+    console.error(`🚨 Fetch error at ${url}:`, err);
+    return { error: "Network error" };
   }
 }
 
 /**
- * Example calls:
- * await apiFetch("/voice/orion", { method: "POST", body: JSON.stringify({ text: "Hello" }) });
- * await apiFetch("/health");
- * await apiFetch("/supabase/status");
+ * Health checks
  */
+export const checkSystem = async () => apiFetch("/health");
+export const checkSupabase = async () => apiFetch("/supabase");
+export const checkBlockchain = async () => apiFetch("/blockchain");
+
+/**
+ * Voice endpoints — Orion and Lyric
+ */
+export async function playVoice(type: "orion" | "lyric", text: string) {
+  const endpoint = `/voice/${type}`;
+  const res = await apiFetch(endpoint, {
+    method: "POST",
+    body: JSON.stringify({ text }),
+  });
+
+  if (res?.audio) {
+    const audio = new Audio(`data:audio/mp3;base64,${res.audio}`);
+    audio.play();
+  } else {
+    console.error("⚠️ Voice API returned no audio:", res);
+  }
+}
