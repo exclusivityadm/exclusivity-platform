@@ -1,59 +1,64 @@
-import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from dotenv import load_dotenv
+import os
 
-# Route imports
-from apps.backend.routes import health, supabase, blockchain, voice
+# Load environment variables
+load_dotenv()
 
 # Initialize FastAPI app
-app = FastAPI(
-    title="Exclusivity Backend",
-    version="1.0.0",
-    description="Core backend API for Exclusivity merchant console.",
-)
+app = FastAPI(title="Exclusivity Backend", version="2.0.0")
 
-# --- CORS CONFIG ---
-frontend_url = os.getenv("FRONTEND_URL", "https://exclusivity-platform.vercel.app")
+# Allow frontend and local origins
 origins = [
-    frontend_url,
     "http://localhost:3000",
     "https://exclusivity-platform.vercel.app",
+    "https://exclusivity-frontend.vercel.app",
     "https://exclusivity.vip",
 ]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
-    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_credentials=True,
 )
 
-# --- ROUTES ---
-app.include_router(health.router)
-app.include_router(supabase.router)
-app.include_router(blockchain.router)
-app.include_router(voice.router)
+# --- ROUTE IMPORTS ---
+from apps.backend.routes import (
+    health,
+    supabase,
+    blockchain,
+    voice,
+    ai,
+    analytics,
+    creative,
+    loyalty,
+    marketing,
+    security,
+    tax
+)
 
+# --- ROUTE REGISTRATION ---
+app.include_router(health.router, prefix="/health", tags=["Health"])
+app.include_router(supabase.router, prefix="/supabase", tags=["Supabase"])
+app.include_router(blockchain.router, prefix="/blockchain", tags=["Blockchain"])
+app.include_router(voice.router, prefix="/voice", tags=["Voice"])
+app.include_router(ai.router, prefix="/ai", tags=["AI"])
+app.include_router(analytics.router, prefix="/analytics", tags=["Analytics"])
+app.include_router(creative.router, prefix="/creative", tags=["Creative"])
+app.include_router(loyalty.router, prefix="/loyalty", tags=["Loyalty"])
+app.include_router(marketing.router, prefix="/marketing", tags=["Marketing"])
+app.include_router(security.router, prefix="/security", tags=["Security"])
+app.include_router(tax.router, prefix="/tax", tags=["Tax"])
 
-# --- ROOT ROUTE ---
+# --- ROOT ENDPOINT ---
 @app.get("/")
-async def root():
-    """Base landing endpoint."""
-    return JSONResponse(
-        content={
-            "app": "Exclusivity Backend",
-            "status": "online",
-            "routes": ["/health", "/supabase/check", "/blockchain/status", "/voice/orion", "/voice/lyric"],
-        }
-    )
+def root():
+    return {"status": "ok", "message": "Exclusivity Backend v2 is live"}
 
-
-# --- ERROR HANDLER ---
-@app.exception_handler(Exception)
-async def global_exception_handler(request, exc):
-    return JSONResponse(
-        status_code=500,
-        content={"error": str(exc), "path": str(request.url)},
-    )
+# --- UVICORN ENTRY POINT ---
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("apps.backend.main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
