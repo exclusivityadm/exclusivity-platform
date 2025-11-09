@@ -5,5 +5,5 @@ router = APIRouter()
 
 @router.get("/", tags=["Health"])
 async def health_check():
-    """Health check endpoint used for Render or uptime monitoring."""
+    """Basic health check endpoint for Render and uptime monitors."""
     return {"status": "ok", "service": "Exclusivity Backend"}
