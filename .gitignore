@@ -1,0 +1,57 @@
+# ======================================
+# 🚫 Core exclusions
+# ======================================
+node_modules/
+.env
+.env.*
+.vscode/
+.DS_Store
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.db
+*.sqlite3
+
+# ======================================
+# 🧱 Build / cache artifacts
+# ======================================
+.next/
+out/
+dist/
+build/
+.cache/
+coverage/
+.venv/
+venv/
+*.egg-info/
+pip-wheel-metadata/
+frontend/.next/
+frontend/node_modules/
+backend/__pycache__/
+
+# ======================================
+# ⚙️ System files
+# ======================================
+Thumbs.db
+desktop.ini
+
+# ======================================
+# 🧩 Environment / secrets
+# ======================================
+*.pem
+*.key
+*.crt
+*.p12
+*.cer
+*.json
+
+# ======================================
+# 🧾 Package locks (optional if you want deterministic builds)
+# Uncomment one if you prefer not to commit lock files.
+# package-lock.json
+# yarn.lock
