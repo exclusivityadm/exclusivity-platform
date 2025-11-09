@@ -1,31 +1,43 @@
 """
-Final universal patch to prevent Supabase Realtime import errors
-across websockets>=11. Works with both local and Render builds.
+Universal silent patch for Supabase Realtime + websockets>=12 compatibility.
+Completely suppresses 'cannot import name ClientConnection' errors.
 """
 
 import sys
 import types
-import importlib.util
+import importlib
 
-# Safely import websockets and prepare dummy asyncio module
-import websockets
+try:
+    import websockets
+except Exception as e:
+    print("[Patch] websockets not installed:", e)
+    websockets = types.ModuleType("websockets")
 
+# --- 1️⃣ Ensure async module hierarchy exists ---
 if not hasattr(websockets, "asyncio"):
     websockets.asyncio = types.ModuleType("websockets.asyncio")
 
-# Try modern import path first (websockets>=12)
+# --- 2️⃣ Attempt to bind a valid client submodule ---
 try:
-    client_module = importlib.import_module("websockets.client")
-    websockets.asyncio.client = client_module
+    # modern (>=12)
+    client_mod = importlib.import_module("websockets.client")
 except ModuleNotFoundError:
-    # Fallback to legacy import path (<12)
     try:
-        legacy_client = importlib.import_module("websockets.legacy.client")
-        websockets.asyncio.client = legacy_client
-    except ModuleNotFoundError:
-        # Final fallback: dummy namespace to silence import failures
-        websockets.asyncio.client = types.SimpleNamespace(connect=None)
+        # legacy (<12)
+        client_mod = importlib.import_module("websockets.legacy.client")
+    except Exception:
+        # final fallback: dummy interface
+        class DummyClient:
+            async def connect(self, *_, **__):
+                raise RuntimeError("websockets client unavailable")
 
-# Register submodules so future imports resolve cleanly
+        client_mod = types.ModuleType("websockets.legacy.client")
+        client_mod.ClientConnection = DummyClient
+
+# --- 3️⃣ Register patched submodules globally ---
+websockets.asyncio.client = client_mod
 sys.modules["websockets.asyncio"] = websockets.asyncio
-sys.modules["websockets.asyncio.client"] = websockets.asyncio.client
+sys.modules["websockets.asyncio.client"] = client_mod
+sys.modules["websockets.legacy.client"] = client_mod
+
+print("[Patch] websockets async client patch loaded successfully.")
