@@ -1,30 +1,53 @@
-# apps/backend/main.py
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from apps.backend.routes import health, supabase, blockchain, voice
 
+# Import route modules
+from apps.backend.routes import health, supabase, blockchain
+from apps.backend.routes.voice import orion, lyric
+
+# Initialize FastAPI app
 app = FastAPI(
-    title="Exclusivity Backend",
-    description="Unified backend for Exclusivity platform",
+    title="Exclusivity Backend API",
+    description="Backend services for Exclusivity platform (voice, supabase, blockchain, etc.)",
     version="1.0.0",
 )
 
-# --- CORS configuration ---
+# Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],      # Can be restricted to your frontend domain later
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# --- Route includes ---
-app.include_router(health.router, prefix="/health", tags=["Health"])
-app.include_router(supabase.router, prefix="/supabase", tags=["Supabase"])
-app.include_router(blockchain.router, prefix="/blockchain", tags=["Blockchain"])
-app.include_router(voice.router, prefix="/voice", tags=["Voice"])
+# Health check route
+app.include_router(health.router, prefix="/health", tags=["health"])
 
-# --- Root endpoint ---
+# Core functional routes
+app.include_router(supabase.router, prefix="/supabase", tags=["supabase"])
+app.include_router(blockchain.router, prefix="/blockchain", tags=["blockchain"])
+
+# Voice endpoints for Orion & Lyric
+app.include_router(orion.router, prefix="/voice", tags=["voice"])
+app.include_router(lyric.router, prefix="/voice", tags=["voice"])
+
+# Root route
 @app.get("/")
 async def root():
-    return {"status": "online", "message": "Exclusivity backend is active and stable"}
+    return {
+        "status": "running",
+        "service": "Exclusivity Backend",
+        "routes": [
+            "/health",
+            "/supabase",
+            "/blockchain",
+            "/voice/orion",
+            "/voice/lyric"
+        ]
+    }
+
+# Entry point for Render / local testing
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("apps.backend.main:app", host="0.0.0.0", port=10000, reload=True)
