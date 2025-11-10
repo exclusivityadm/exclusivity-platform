@@ -100,7 +100,7 @@ export default function Page() {
           ? "Hello, this is Orion — your Exclusivity copilot online and ready."
           : "Hi there, Lyric here — Exclusivity systems confirmed and synchronized.";
 
-      const res = await fetch(`${BACKEND_URL}/voice`, {
+      const res = await fetch(`${BACKEND_URL}/voice/`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ speaker, text }),
