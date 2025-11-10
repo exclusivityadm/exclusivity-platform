@@ -1,63 +1,46 @@
-// apps/frontend/utils/api.ts
-
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "https://exclusivity-backend.onrender.com";
+// apps/frontend/util/api.ts
 
 /**
- * Helper to normalize request paths (avoiding double slashes)
+ * Unified API client for Exclusivity frontend.
+ * Matches the current backend: single POST /voice that accepts { speaker, text }.
  */
-function normalizePath(path: string): string {
-  if (!path.startsWith("/")) path = "/" + path;
-  return BACKEND_URL + path;
-}
 
-/**
- * Generic API fetcher with automatic error handling
- */
-export async function apiFetch(path: string, options: RequestInit = {}) {
-  const url = normalizePath(path);
-
+export async function generateVoice(
+  speaker: "Orion" | "Lyric",
+  text: string
+): Promise<string | null> {
   try {
-    const response = await fetch(url, {
-      headers: {
-        "Content-Type": "application/json",
-      },
-      ...options,
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error(`❌ API ${url} failed: ${response.status} ${errorText}`);
-      return { error: `Error ${response.status}` };
+    const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL;
+    if (!backendUrl) {
+      console.error("❌ Missing NEXT_PUBLIC_BACKEND_URL");
+      return null;
     }
 
-    return await response.json();
+    const res = await fetch(`${backendUrl}/voice`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      // IMPORTANT: if your backend checks origin/cookies, include credentials here
+      body: JSON.stringify({ speaker, text }),
+      // next.js edge/runtime-safe option to avoid caching voice calls
+      cache: "no-store",
+    });
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => "");
+      console.error(`❌ /voice failed: ${res.status} ${res.statusText} — ${errText}`);
+      return null;
+    }
+
+    const data = (await res.json()) as { audio_url?: string };
+    if (!data?.audio_url) {
+      console.error("⚠️ Backend responded without audio_url");
+      return null;
+    }
+
+    console.log(`✅ Voice generated for ${speaker}: ${data.audio_url}`);
+    return data.audio_url;
   } catch (err) {
-    console.error(`🚨 Fetch error at ${url}:`, err);
-    return { error: "Network error" };
-  }
-}
-
-/**
- * Health checks
- */
-export const checkSystem = async () => apiFetch("/health");
-export const checkSupabase = async () => apiFetch("/supabase");
-export const checkBlockchain = async () => apiFetch("/blockchain");
-
-/**
- * Voice endpoints — Orion and Lyric
- */
-export async function playVoice(type: "orion" | "lyric", text: string) {
-  const endpoint = `/voice/${type}`;
-  const res = await apiFetch(endpoint, {
-    method: "POST",
-    body: JSON.stringify({ text }),
-  });
-
-  if (res?.audio) {
-    const audio = new Audio(`data:audio/mp3;base64,${res.audio}`);
-    audio.play();
-  } else {
-    console.error("⚠️ Voice API returned no audio:", res);
+    console.error("❌ Failed to fetch /voice:", err);
+    return null;
   }
 }
