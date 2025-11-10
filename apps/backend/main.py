@@ -2,8 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 # Import route modules
-from apps.backend.routes import health, supabase, blockchain
-from apps.backend.routes.voice import orion, lyric
+from apps.backend.routes import health, supabase, blockchain, voice
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -15,7 +14,7 @@ app = FastAPI(
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],      # Can be restricted to your frontend domain later
+    allow_origins=["*"],  # Can be restricted later to your frontend domain
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -24,15 +23,12 @@ app.add_middleware(
 # Health check route
 app.include_router(health.router, prefix="/health", tags=["health"])
 
-# Core functional routes
+# Core routes
 app.include_router(supabase.router, prefix="/supabase", tags=["supabase"])
 app.include_router(blockchain.router, prefix="/blockchain", tags=["blockchain"])
+app.include_router(voice.router, prefix="/voice", tags=["voice"])
 
-# Voice endpoints for Orion & Lyric
-app.include_router(orion.router, prefix="/voice", tags=["voice"])
-app.include_router(lyric.router, prefix="/voice", tags=["voice"])
-
-# Root route
+# Root route for quick verification
 @app.get("/")
 async def root():
     return {
@@ -42,12 +38,11 @@ async def root():
             "/health",
             "/supabase",
             "/blockchain",
-            "/voice/orion",
-            "/voice/lyric"
-        ]
+            "/voice",
+        ],
     }
 
-# Entry point for Render / local testing
+# Entry point for Render and local dev
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("apps.backend.main:app", host="0.0.0.0", port=10000, reload=True)
