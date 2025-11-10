@@ -20,13 +20,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Health check route
+# Health route
 app.include_router(health.router, prefix="/health", tags=["health"])
 
 # Core routes
 app.include_router(supabase.router, prefix="/supabase", tags=["supabase"])
 app.include_router(blockchain.router, prefix="/blockchain", tags=["blockchain"])
-app.include_router(voice.router, prefix="/voice", tags=["voice"])
+app.include_router(voice.router)  # ✅ no prefix, handled inside router
 
 # Root route for quick verification
 @app.get("/")
@@ -42,7 +42,7 @@ async def root():
         ],
     }
 
-# Entry point for Render and local dev
+# Entry point for Render & local dev
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("apps.backend.main:app", host="0.0.0.0", port=10000, reload=True)
