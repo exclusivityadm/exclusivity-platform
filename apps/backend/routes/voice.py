@@ -1,5 +1,5 @@
 # apps/backend/routes/voice.py
-from fastapi import APIRouter
+from fastapi import APIRouter, Response
 from pydantic import BaseModel
 import os
 import httpx
@@ -22,11 +22,10 @@ async def generate_voice_from_elevenlabs(text: str, voice_id: str):
     if not ELEVENLABS_API_KEY:
         return {"error": "Missing ElevenLabs API key"}
 
-    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream"
 
     headers = {
         "xi-api-key": ELEVENLABS_API_KEY,
-        # ✅ Request raw audio back
         "Accept": "audio/mpeg",
         "Content-Type": "application/json",
     }
@@ -34,10 +33,7 @@ async def generate_voice_from_elevenlabs(text: str, voice_id: str):
     payload = {
         "text": text,
         "model_id": "eleven_multilingual_v2",
-        "voice_settings": {
-            "stability": 0.5,
-            "similarity_boost": 0.8
-        },
+        "voice_settings": {"stability": 0.5, "similarity_boost": 0.8},
     }
 
     async with httpx.AsyncClient(timeout=60.0) as client:
@@ -50,15 +46,18 @@ async def generate_voice_from_elevenlabs(text: str, voice_id: str):
             "details": response.text,
         }
 
-    # ✅ Convert the binary audio response to Base64
+    # ElevenLabs sends raw MP3 data in .content
+    if not response.content:
+        return {"error": "Empty audio response"}
+
     audio_base64 = base64.b64encode(response.content).decode("utf-8")
     return {"audio_base64": audio_base64}
 
 
 @router.post("/voice")
 async def generate_voice(req: VoiceRequest):
-    """Main unified route used by frontend (POST /voice)."""
-    speaker = req.speaker.lower()
+    """Unified route used by frontend (POST /voice)."""
+    speaker = req.speaker.lower().strip()
     text = req.text.strip()
 
     if not text:
@@ -71,4 +70,10 @@ async def generate_voice(req: VoiceRequest):
     else:
         return {"error": "Invalid speaker name"}
 
-    return await generate_voice_from_elevenlabs(text, voice_id)
+    result = await generate_voice_from_elevenlabs(text, voice_id)
+
+    # If error occurred upstream
+    if "error" in result:
+        return result
+
+    return result
