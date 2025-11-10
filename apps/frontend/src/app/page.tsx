@@ -5,8 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 type Json = Record<string, any>;
 
 const BACKEND_URL =
-  process.env.NEXT_PUBLIC_BACKEND_URL?.replace(/\/+$/, "") ||
-  "https://exclusivity-backend.onrender.com";
+  process.env.NEXT_PUBLIC_BACKEND_URL?.replace(/\/+$/, "") || "http://127.0.0.1:8000";
 
 type FetchState<T> = {
   loading: boolean;
@@ -43,6 +42,7 @@ function useFetch<T = any>(path: string | null, deps: any[] = []) {
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps.concat(url));
 
   return state;
@@ -50,15 +50,13 @@ function useFetch<T = any>(path: string | null, deps: any[] = []) {
 
 function Card(props: { title: string; children?: React.ReactNode; footer?: React.ReactNode }) {
   return (
-    <div
-      style={{
-        background: "#111318",
-        border: "1px solid #1f2430",
-        borderRadius: 16,
-        padding: 16,
-        width: "100%",
-      }}
-    >
+    <div style={{
+      background: "#111318",
+      border: "1px solid #1f2430",
+      borderRadius: 16,
+      padding: 16,
+      width: "100%",
+    }}>
       <div style={{ fontSize: 18, fontWeight: 600, marginBottom: 8 }}>{props.title}</div>
       <div style={{ fontSize: 14, lineHeight: 1.6 }}>{props.children}</div>
       {props.footer ? <div style={{ marginTop: 12, opacity: 0.9 }}>{props.footer}</div> : null}
@@ -68,15 +66,13 @@ function Card(props: { title: string; children?: React.ReactNode; footer?: React
 
 function Row(props: { label: string; value: any }) {
   return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: "220px 1fr",
-        gap: 12,
-        padding: "6px 0",
-        borderBottom: "1px dashed #222634",
-      }}
-    >
+    <div style={{
+      display: "grid",
+      gridTemplateColumns: "220px 1fr",
+      gap: 12,
+      padding: "6px 0",
+      borderBottom: "1px dashed #222634"
+    }}>
       <div style={{ color: "#9aa1af" }}>{props.label}</div>
       <div style={{ wordBreak: "break-word" }}>{String(props.value)}</div>
     </div>
@@ -84,76 +80,81 @@ function Row(props: { label: string; value: any }) {
 }
 
 export default function Page() {
-  // --- live backend queries ---
+  // --- live queries ---
   const health = useFetch<Json>("/health", []);
-  const systemSummary = useFetch<Json>("/blockchain/status", []);
-  const chainStatus = useFetch<Json>("/blockchain/status", []);
-  const dbTest = useFetch<Json>("/supabase/test", []);
+  const systemSummary = useFetch<Json>("/analytics/system-summary", []);
+  const chainStatus = useFetch<Json>("/analytics/chain-status", []);
+  const dbTest = useFetch<Json>("/loyalty/test-db", []);
 
-  // --- voice test function ---
-  const callVoice = useCallback(async (speaker: "orion" | "lyric") => {
-    const res = await fetch(`${BACKEND_URL}/voice`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        speaker,
-        text: speaker === "orion" ? "Orion online." : "Lyric online.",
-      }),
-    });
-
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`${res.status} ${res.statusText} — ${text}`);
-    }
-
-    const json = (await res.json()) as { audio_url?: string };
-    if (!json.audio_url) throw new Error("No audio URL returned");
-
-    const audio = new Audio(json.audio_url);
-    await audio.play();
-  }, []);
-
+  // --- voice playback helpers ---
   const [voiceBusy, setVoiceBusy] = useState<null | "orion" | "lyric">(null);
 
-  const handleVoice = async (who: "orion" | "lyric") => {
+  const playAudioFromUrl = useCallback((audioUrl: string) => {
     try {
-      setVoiceBusy(who);
-      await callVoice(who);
-    } catch (e: any) {
-      alert(`Voice error: ${e?.message || e}`);
-      console.error(e);
-    } finally {
-      setVoiceBusy(null);
+      const audio = new Audio(audioUrl);
+      audio.play().catch((e) => console.error("Playback failed:", e));
+    } catch (err) {
+      console.error("Audio playback error:", err);
+      alert("Unable to play audio. See console for details.");
     }
+  }, []);
+
+  const callVoice = useCallback(async (speaker: "orion" | "lyric") => {
+    try {
+      const text =
+        speaker === "orion"
+          ? "Hello, this is Orion — your Exclusivity copilot online and ready."
+          : "Hi there, Lyric here — Exclusivity systems confirmed and synchronized.";
+
+      const res = await fetch(`${BACKEND_URL}/voice`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ speaker, text }),
+      });
+
+      if (!res.ok) {
+        const errText = await res.text();
+        throw new Error(`${res.status} ${res.statusText} — ${errText}`);
+      }
+
+      const data = await res.json();
+      if (data?.audio_url) {
+        console.log(`✅ Voice generated: ${data.audio_url}`);
+        playAudioFromUrl(data.audio_url);
+      } else {
+        throw new Error("No audio URL returned");
+      }
+    } catch (e: any) {
+      console.error("Voice error:", e);
+      alert(`Voice error: ${e?.message || e}`);
+    }
+  }, [playAudioFromUrl]);
+
+  const handleVoice = async (who: "orion" | "lyric") => {
+    setVoiceBusy(who);
+    await callVoice(who);
+    setVoiceBusy(null);
   };
 
   return (
     <main style={{ padding: 24 }}>
-      {/* Header */}
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 18 }}>
-        <div
-          style={{
-            width: 10,
-            height: 10,
-            borderRadius: 999,
-            background: health.data ? "#22c55e" : "#ef4444",
-            boxShadow: "0 0 10px rgba(34,197,94,0.6)",
-          }}
-        />
+        <div style={{
+          width: 10, height: 10, borderRadius: 999,
+          background: health.data ? "#22c55e" : "#ef4444",
+          boxShadow: "0 0 10px rgba(34,197,94,0.6)"
+        }}/>
         <div style={{ fontSize: 20, fontWeight: 700 }}>Exclusivity — Merchant Console</div>
         <div style={{ opacity: 0.75, marginLeft: "auto", fontSize: 12 }}>
           Backend: <code>{BACKEND_URL}</code>
         </div>
       </div>
 
-      {/* Dashboard Grid */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(12, 1fr)",
-          gap: 16,
-        }}
-      >
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(12, 1fr)",
+        gap: 16
+      }}>
         {/* System Summary */}
         <div style={{ gridColumn: "span 6" }}>
           <Card title="System Summary">
@@ -161,62 +162,64 @@ export default function Page() {
             {systemSummary.error && <div style={{ color: "#ef4444" }}>{systemSummary.error}</div>}
             {systemSummary.data && (
               <>
-                <Row label="Version" value={systemSummary.data.version} />
-                <Row label="Environment" value={systemSummary.data.environment} />
-                <Row label="Debug Mode" value={systemSummary.data.debug_mode} />
-                <Row label="Base RPC URL" value={systemSummary.data.base_rpc_url} />
-                <Row label="Supabase Connected" value={String(systemSummary.data.supabase_connected)} />
-                <Row label="OpenAI Key Present" value={String(systemSummary.data.openai_key)} />
-                <Row label="ElevenLabs Key Present" value={String(systemSummary.data.elevenlabs_key)} />
+                <Row label="Version" value={systemSummary.data.system?.version}/>
+                <Row label="Environment" value={systemSummary.data.system?.environment}/>
+                <Row label="Debug Mode" value={systemSummary.data.system?.debug_mode}/>
+                <Row label="Supabase URL" value={systemSummary.data.system?.supabase_url}/>
+                <Row label="Base RPC URL" value={systemSummary.data.system?.base_rpc_url}/>
+                <Row label="OpenAI Key Present" value={String(systemSummary.data.system?.openai_key)}/>
+                <Row label="ElevenLabs Key Present" value={String(systemSummary.data.system?.elevenlabs_key)}/>
+                <Row label="Shopify Connected" value={String(systemSummary.data.system?.shopify_connected)}/>
+                <Row label="Render Service" value={systemSummary.data.system?.render_service}/>
+                <Row label="Vercel Project" value={systemSummary.data.system?.vercel_project}/>
               </>
             )}
           </Card>
         </div>
 
-        {/* Blockchain Status */}
+        {/* Chain Status */}
         <div style={{ gridColumn: "span 6" }}>
           <Card title="Blockchain (Base) Status">
             {chainStatus.loading && <div>Loading…</div>}
             {chainStatus.error && <div style={{ color: "#ef4444" }}>{chainStatus.error}</div>}
             {chainStatus.data && (
               <>
-                <Row label="Connected" value={String(chainStatus.data.connected)} />
-                <Row label="Chain ID (hex)" value={chainStatus.data.chain_id_hex} />
-                <Row label="Chain ID (dec)" value={chainStatus.data.chain_id_decimal} />
-                <Row label="Minting Enabled" value={chainStatus.data.minting_enabled} />
-                <Row label="Aesthetics Enabled" value={chainStatus.data.aesthetics_enabled} />
-                <Row label="Brand Wallet" value={chainStatus.data.wallets?.brand_wallet || "(unset)"} />
-                <Row label="Developer Wallet" value={chainStatus.data.wallets?.developer_wallet || "(unset)"} />
+                <Row label="Connected" value={String(chainStatus.data.connected)}/>
+                <Row label="Chain ID (hex)" value={chainStatus.data.chain_id_hex}/>
+                <Row label="Chain ID (dec)" value={chainStatus.data.chain_id_decimal}/>
+                <Row label="Minting Enabled" value={chainStatus.data.minting_enabled}/>
+                <Row label="Aesthetics Enabled" value={chainStatus.data.aesthetics_enabled}/>
+                <Row label="Brand Wallet" value={chainStatus.data.wallets?.brand_wallet || "(unset)"}/>
+                <Row label="Developer Wallet" value={chainStatus.data.wallets?.developer_wallet || "(unset)"}/>
+                <Row label="Coinbase Network" value={chainStatus.data.coinbase_network}/>
+                <Row label="Domain Allowlist" value={chainStatus.data.domain_allowlist}/>
               </>
             )}
           </Card>
         </div>
 
-        {/* Supabase DB Test */}
+        {/* Database Check */}
         <div style={{ gridColumn: "span 6" }}>
           <Card title="Database Check (Supabase)">
             {dbTest.loading && <div>Loading…</div>}
             {dbTest.error && <div style={{ color: "#ef4444" }}>{dbTest.error}</div>}
             {dbTest.data && (
               <>
-                <Row label="Connected" value={String(dbTest.data.connected)} />
-                {"records" in (dbTest.data || {}) && (
-                  <Row label="Sample Records" value={dbTest.data.records} />
-                )}
+                <Row label="Connected" value={String(dbTest.data.connected)}/>
+                {"records" in (dbTest.data || {}) && <Row label="Sample Records" value={dbTest.data.records}/> }
+                {"database_url" in (dbTest.data || {}) && <Row label="DB URL" value={dbTest.data.database_url || "(hidden)"} />}
               </>
             )}
           </Card>
         </div>
 
-        {/* Voice Copilots */}
+        {/* Voice Tests */}
         <div style={{ gridColumn: "span 6" }}>
           <Card
             title="AI Copilots — Voice Test"
-            footer={
-              <div style={{ fontSize: 12, color: "#9aa1af" }}>
-                Each button sends text to the backend `/voice` route using ElevenLabs.
-              </div>
-            }
+            footer={<div style={{ fontSize: 12, color: "#9aa1af" }}>
+              Clicking a button will send text to ElevenLabs through your backend and play the returned audio.
+            </div>}
           >
             <div style={{ display: "flex", gap: 12 }}>
               <button
@@ -229,7 +232,7 @@ export default function Page() {
                   borderRadius: 10,
                   color: "white",
                   fontWeight: 600,
-                  cursor: "pointer",
+                  cursor: "pointer"
                 }}
               >
                 {voiceBusy === "orion" ? "Synthesizing…" : "Play Orion"}
@@ -245,7 +248,7 @@ export default function Page() {
                   borderRadius: 10,
                   color: "white",
                   fontWeight: 600,
-                  cursor: "pointer",
+                  cursor: "pointer"
                 }}
               >
                 {voiceBusy === "lyric" ? "Synthesizing…" : "Play Lyric"}
