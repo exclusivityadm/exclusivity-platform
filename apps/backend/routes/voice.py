@@ -6,23 +6,21 @@ import base64
 
 router = APIRouter()
 
-# --- Voice Configuration ---
+# --- Environment Variables ---
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
 
-# ✅ Only use the keys that actually exist in Render
+# ✅ Use only the two verified variable names present in Render
 ORION_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ORION") or os.getenv("AI_VOICE_ORION")
 LYRIC_VOICE_ID = os.getenv("ELEVENLABS_VOICE_LYRIC") or os.getenv("AI_VOICE_LYRIC")
-
 
 class VoiceRequest(BaseModel):
     speaker: str
     text: str
 
-
 async def generate_voice_from_elevenlabs(text: str, voice_id: str):
     """Generate speech via ElevenLabs and return Base64-encoded MP3 audio."""
     if not ELEVENLABS_API_KEY:
-        return {"error": "Missing ElevenLabs API key"}
+        return {"error": "Missing ELEVENLABS_API_KEY"}
 
     if not voice_id:
         return {"error": "Missing ElevenLabs voice ID"}
@@ -33,7 +31,6 @@ async def generate_voice_from_elevenlabs(text: str, voice_id: str):
         "Accept": "audio/mpeg",
         "Content-Type": "application/json",
     }
-
     payload = {
         "text": text,
         "model_id": "eleven_multilingual_v2",
@@ -53,15 +50,15 @@ async def generate_voice_from_elevenlabs(text: str, voice_id: str):
             "details": response.text,
         }
 
-    # Convert binary audio to Base64
+    # Convert audio binary to Base64
     audio_base64 = base64.b64encode(response.content).decode("utf-8")
     return {"audio_base64": audio_base64}
 
 
-@router.post("/voice")
+@router.post("/")
 async def generate_voice(req: VoiceRequest):
-    """Main route used by frontend (POST /voice)."""
-    speaker = req.speaker.lower()
+    """Main voice synthesis endpoint (POST /voice)."""
+    speaker = req.speaker.lower().strip()
     text = req.text.strip()
 
     if not text:
@@ -77,9 +74,9 @@ async def generate_voice(req: VoiceRequest):
     return await generate_voice_from_elevenlabs(text, voice_id)
 
 
-@router.get("/voice/test")
+@router.get("/test")
 async def voice_test():
-    """Check which voice environment variables are loaded."""
+    """Verify ElevenLabs configuration is correctly loaded."""
     return {
         "ELEVENLABS_API_KEY": "set" if ELEVENLABS_API_KEY else None,
         "ORION_VOICE_ID": ORION_VOICE_ID,
