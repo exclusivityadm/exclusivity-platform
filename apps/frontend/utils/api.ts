@@ -1,28 +1,21 @@
-// apps/frontend/util/api.ts
-
 /**
- * Unified API client for Exclusivity frontend.
- * Matches the current backend: single POST /voice that accepts { speaker, text }.
+ * Exclusivity Unified API Client
+ * Handles all frontend → backend calls, including voice synthesis.
  */
 
 export async function generateVoice(
-  speaker: "Orion" | "Lyric",
+  speaker: "orion" | "lyric",
   text: string
 ): Promise<string | null> {
   try {
-    const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL;
-    if (!backendUrl) {
-      console.error("❌ Missing NEXT_PUBLIC_BACKEND_URL");
-      return null;
-    }
+    const backendUrl =
+      process.env.NEXT_PUBLIC_BACKEND_URL?.replace(/\/+$/, "") ||
+      "http://127.0.0.1:8000";
 
     const res = await fetch(`${backendUrl}/voice`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      // IMPORTANT: if your backend checks origin/cookies, include credentials here
       body: JSON.stringify({ speaker, text }),
-      // next.js edge/runtime-safe option to avoid caching voice calls
-      cache: "no-store",
     });
 
     if (!res.ok) {
@@ -31,16 +24,30 @@ export async function generateVoice(
       return null;
     }
 
-    const data = (await res.json()) as { audio_url?: string };
-    if (!data?.audio_url) {
-      console.error("⚠️ Backend responded without audio_url");
-      return null;
+    const data = await res.json();
+    if (data?.audio_base64) {
+      console.log(`✅ Voice generated successfully for ${speaker}`);
+      return `data:audio/mpeg;base64,${data.audio_base64}`;
     }
 
-    console.log(`✅ Voice generated for ${speaker}: ${data.audio_url}`);
-    return data.audio_url;
-  } catch (err) {
-    console.error("❌ Failed to fetch /voice:", err);
+    console.warn("⚠️ No audio data returned from backend");
     return null;
+  } catch (err) {
+    console.error("❌ Voice fetch failed:", err);
+    return null;
+  }
+}
+
+/**
+ * Utility helper to play an audio string.
+ */
+export function playAudio(audioSrc: string) {
+  try {
+    const audio = new Audio(audioSrc);
+    audio.play().catch((e) => {
+      console.error("⚠️ Playback failed:", e);
+    });
+  } catch (err) {
+    console.error("❌ Audio playback error:", err);
   }
 }
