@@ -1,17 +1,17 @@
 # =====================================================
-# 🎙 Exclusivity Backend — AI & Voice Routes (safe, merged)
+# 🎙 Exclusivity Backend — AI & Voice Routes (safe, merged, +stream)
 # =====================================================
-# - Endpoints:
+# Endpoints:
 #   GET  /ai/respond?prompt=...
 #   GET  /ai/voice-test/orion
 #   GET  /ai/voice-test/lyric
+#   GET  /ai/voice-test/orion.stream   -> audio/mpeg (no Base64)
+#   GET  /ai/voice-test/lyric.stream   -> audio/mpeg (no Base64)
 #   GET  /ai/init-questions
 #   POST /ai/init-answers  { merchant_id, answers: { ... } }
-#
-# - Import-safe: OpenAI is optional; ElevenLabs via urllib (no 'requests' required).
-# - No Supabase dependency; /init-answers echoes what would be saved.
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel
 from typing import Dict, List
 import os, base64, json, urllib.request, urllib.error
@@ -26,20 +26,17 @@ ELEVEN_LYRIC     = os.getenv("ELEVENLABS_LYRIC_VOICE")
 OPENAI_TTS_MODEL = os.getenv("AI_MODEL_TTS", "gpt-4o-mini-tts")
 OPENAI_CHAT_MODEL = os.getenv("AI_MODEL_GPT", "gpt-5")
 
-# Optional OpenAI (guarded)
+# Optional OpenAI client(s), fully guarded
 try:
-    # Prefer OpenAI v1 client if available
-    from openai import OpenAI  # type: ignore
+    from openai import OpenAI  # v1 client
     _client = OpenAI()
 except Exception:
+    _client = None
     try:
-        # Fallback to legacy import if present
-        import openai  # type: ignore
+        import openai  # legacy
         openai.api_key = os.getenv("OPENAI_API_KEY")
-        _client = None  # use legacy calls
     except Exception:
         openai = None
-        _client = None
 
 # ---------- Minimal HTTP helper (stdlib) ----------
 def _http_post_json(url: str, payload: Dict, headers: Dict[str, str], timeout: int = 30) -> bytes:
@@ -81,11 +78,10 @@ def _tts_openai(text: str, voice: str = "alloy") -> bytes:
     raise HTTPException(500, "OpenAI TTS not available (package/key missing)")
 
 # =====================================================
-# PRESERVED: Basic AI text response
+# Basic AI text response (preserved)
 # =====================================================
 @router.get("/respond", tags=["ai"])
 def ai_respond(prompt: str = "Hello Orion!"):
-    """Basic AI text response test."""
     if _client:
         try:
             c = _client.chat.completions.create(
@@ -104,11 +100,10 @@ def ai_respond(prompt: str = "Hello Orion!"):
             return {"prompt": prompt, "response": c.choices[0].message.content}
         except Exception as e:
             raise HTTPException(500, str(e))
-    # No OpenAI configured -> echo
     return {"prompt": prompt, "response": "OpenAI not configured; echo: " + prompt}
 
 # =====================================================
-# PRESERVED: Voice tests (Orion / Lyric)
+# Voice tests — JSON (preserved)
 # =====================================================
 @router.get("/voice-test/orion", tags=["ai"])
 def voice_test_orion():
@@ -125,7 +120,22 @@ def voice_test_lyric():
             "audio_base64": base64.b64encode(audio).decode()[:80] + "..."}
 
 # =====================================================
-# NEW: Brand Intelligence endpoints
+# Voice tests — STREAM (new, easiest for frontend)
+# =====================================================
+@router.get("/voice-test/orion.stream", tags=["ai"])
+def voice_test_orion_stream():
+    text = "Hello, I am Orion. The Exclusivity platform is online and stable."
+    audio = _tts_elevenlabs(text, ELEVEN_ORION) if (ELEVEN_API_KEY and ELEVEN_ORION) else _tts_openai(text, "alloy")
+    return Response(content=audio, media_type="audio/mpeg")
+
+@router.get("/voice-test/lyric.stream", tags=["ai"])
+def voice_test_lyric_stream():
+    text = "Hello, I am Lyric. All systems are active and synchronized."
+    audio = _tts_elevenlabs(text, ELEVEN_LYRIC) if (ELEVEN_API_KEY and ELEVEN_LYRIC) else _tts_openai(text, "verse")
+    return Response(content=audio, media_type="audio/mpeg")
+
+# =====================================================
+# Brand Intelligence (new, safe)
 # =====================================================
 INIT_QUESTIONS: List[str] = [
     "Describe your brand in one sentence.",
@@ -145,6 +155,5 @@ class InitAnswersIn(BaseModel):
 
 @router.post("/init-answers", tags=["ai"])
 def save_init_answers(inb: InitAnswersIn):
-    # Echo-only stub (persist to Supabase later if desired)
     tone_tags = list(inb.answers.keys())
     return {"ok": True, "merchant_id": inb.merchant_id, "tone_tags": tone_tags}
