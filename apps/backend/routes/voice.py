@@ -1,10 +1,8 @@
-# apps/backend/routes/voice.py
 # =====================================================
-# /voice compatibility + direct endpoints
-# - Handles OPTIONS cleanly (no more 400 preflights)
-# - Supports POST /voice (JSON → base64 audio) using your env names
-# - Redirects legacy paths to /ai/voice-test/... (which already work)
-# - Exposes /voice/orion.stream and /voice/lyric.stream for <audio> tags
+# /voice router (no redirects on POST; CORS-safe)
+# - OPTIONS preflight: 200
+# - POST /voice and /voice/ (both) -> JSON {audio_base64}
+# - Legacy redirects for /voice/*.stream to /ai/voice-test/*.stream
 # =====================================================
 
 from fastapi import APIRouter, Request, HTTPException
@@ -14,7 +12,7 @@ import os, base64, json, urllib.request, urllib.error
 
 router = APIRouter()
 
-# ----- Env (exact names you provided) -----
+# ----- Env (exact names) -----
 ELEVEN_API_KEY     = os.getenv("ELEVENLABS_API_KEY")
 ELEVEN_MODEL       = os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2")
 ELEVEN_VOICE_ORION = os.getenv("ELEVENLABS_VOICE_ORION")
@@ -44,7 +42,7 @@ def _tts_elevenlabs(text: str, voice_id: str) -> bytes:
     }
     return _http_post_json(url, payload, headers)
 
-# ---------- CORS preflight catcher ----------
+# ---------- CORS preflight ----------
 @router.options("/{path:path}")
 def options_any(path: str, request: Request):
     return Response(status_code=200)
@@ -53,58 +51,47 @@ def options_any(path: str, request: Request):
 @router.get("/")
 def root():
     return {
-        "moved": True,
-        "use": {
-            "orion_stream": "/ai/voice-test/orion.stream",
-            "lyric_stream": "/ai/voice-test/lyric.stream",
-            "orion_json": "/ai/voice-test/orion",
-            "lyric_json": "/ai/voice-test/lyric",
-        }
+        "moved": False,
+        "direct_stream": {
+            "orion": "/ai/voice-test/orion.stream",
+            "lyric": "/ai/voice-test/lyric.stream",
+        },
+        "json_post": "/voice or /voice/  (body: {speaker:'orion'|'lyric', text:'...'})",
     }
 
-# ---------- Legacy redirects (keep old callers working) ----------
-@router.get("/orion")
-def legacy_orion_json():  return RedirectResponse("/ai/voice-test/orion", status_code=307)
-
-@router.get("/lyric")
-def legacy_lyric_json():  return RedirectResponse("/ai/voice-test/lyric", status_code=307)
-
+# ---------- Legacy redirects for *.stream ----------
 @router.get("/orion.stream")
 def legacy_orion_stream():  return RedirectResponse("/ai/voice-test/orion.stream", status_code=307)
 
 @router.get("/lyric.stream")
 def legacy_lyric_stream():  return RedirectResponse("/ai/voice-test/lyric.stream", status_code=307)
 
-# ---------- Direct POST /voice (JSON → base64) ----------
+# ---------- JSON POST: accept both /voice and /voice/ ----------
 class VoiceRequest(BaseModel):
     speaker: str
     text: str
 
-@router.post("/")
-def generate_voice(req: VoiceRequest):
-    speaker = (req.speaker or "").strip().lower()
-    text = (req.text or "").strip()
-    if not text:
+def _gen_voice_response(speaker: str, text: str):
+    s = (speaker or "").strip().lower()
+    if not text.strip():
         raise HTTPException(400, "Text is empty")
-    if speaker == "orion":
+    if s == "orion":
         vid = ELEVEN_VOICE_ORION
-    elif speaker == "lyric":
+    elif s == "lyric":
         vid = ELEVEN_VOICE_LYRIC
     else:
         raise HTTPException(400, f"Invalid speaker: {speaker}")
     audio = _tts_elevenlabs(text, vid)
-    return {"speaker": speaker, "length_bytes": len(audio),
-            "audio_base64": base64.b64encode(audio).decode()[:80] + "..."}
+    return {
+        "speaker": s,
+        "length_bytes": len(audio),
+        "audio_base64": base64.b64encode(audio).decode()
+    }
 
-# ---------- Direct streams at /voice/* (optional convenience) ----------
-@router.get("/orion.direct.stream")
-def orion_direct_stream():
-    audio = _tts_elevenlabs("Hello, I am Orion.", ELEVEN_VOICE_ORION)
-    return Response(content=audio, media_type="audio/mpeg",
-                    headers={"Accept-Ranges":"bytes","Content-Length":str(len(audio))})
+@router.post("", include_in_schema=False)
+def post_voice_no_slash(req: VoiceRequest):
+    return _gen_voice_response(req.speaker, req.text)
 
-@router.get("/lyric.direct.stream")
-def lyric_direct_stream():
-    audio = _tts_elevenlabs("Hello, I am Lyric.", ELEVEN_VOICE_LYRIC)
-    return Response(content=audio, media_type="audio/mpeg",
-                    headers={"Accept-Ranges":"bytes","Content-Length":str(len(audio))})
+@router.post("/")
+def post_voice_with_slash(req: VoiceRequest):
+    return _gen_voice_response(req.speaker, req.text)
