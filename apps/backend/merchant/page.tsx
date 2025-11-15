@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useState } from "react";
-
 const API = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/+$/, "");
 
 export default function MerchantAdmin() {
