@@ -1,29 +1,21 @@
 # =====================================================
-# 🎙 Exclusivity Backend — AI & Voice Routes (safe, merged, +stream)
+# 🎙 Exclusivity Backend — AI & Voice Routes (with Range streaming)
 # =====================================================
-# Endpoints:
-#   GET  /ai/respond?prompt=...
-#   GET  /ai/voice-test/orion
-#   GET  /ai/voice-test/lyric
-#   GET  /ai/voice-test/orion.stream   -> audio/mpeg (no Base64)
-#   GET  /ai/voice-test/lyric.stream   -> audio/mpeg (no Base64)
-#   GET  /ai/init-questions
-#   POST /ai/init-answers  { merchant_id, answers: { ... } }
 
-from fastapi import APIRouter, HTTPException
-from fastapi.responses import Response
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
-from typing import Dict, List
-import os, base64, json, urllib.request, urllib.error
+from typing import Dict, List, Optional, Tuple
+import os, base64, json, urllib.request, urllib.error, io
 
 router = APIRouter()
 
 # ---------- Config (env) ----------
-ELEVEN_API_KEY   = os.getenv("ELEVENLABS_API_KEY")
-ELEVEN_MODEL     = os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2")
-ELEVEN_ORION     = os.getenv("ELEVENLABS_ORION_VOICE")
-ELEVEN_LYRIC     = os.getenv("ELEVENLABS_LYRIC_VOICE")
-OPENAI_TTS_MODEL = os.getenv("AI_MODEL_TTS", "gpt-4o-mini-tts")
+ELEVEN_API_KEY    = os.getenv("ELEVENLABS_API_KEY")
+ELEVEN_MODEL      = os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2")
+ELEVEN_ORION      = os.getenv("ELEVENLABS_ORION_VOICE")
+ELEVEN_LYRIC      = os.getenv("ELEVENLABS_LYRIC_VOICE")
+OPENAI_TTS_MODEL  = os.getenv("AI_MODEL_TTS", "gpt-4o-mini-tts")
 OPENAI_CHAT_MODEL = os.getenv("AI_MODEL_GPT", "gpt-5")
 
 # Optional OpenAI client(s), fully guarded
@@ -120,22 +112,62 @@ def voice_test_lyric():
             "audio_base64": base64.b64encode(audio).decode()[:80] + "..."}
 
 # =====================================================
-# Voice tests — STREAM (new, easiest for frontend)
+# Range-aware streaming helpers
+# =====================================================
+def _parse_range(range_header: Optional[str], total: int) -> Optional[Tuple[int, int]]:
+    # Example: "bytes=0-1023"
+    if not range_header or not range_header.startswith("bytes="):
+        return None
+    try:
+        rng = range_header.split("=", 1)[1]
+        start_str, end_str = (rng.split("-", 1) + [""])[:2]
+        start = int(start_str) if start_str else 0
+        end = int(end_str) if end_str else total - 1
+        if start < 0 or end < start or end >= total:
+            return None
+        return (start, end)
+    except Exception:
+        return None
+
+def _stream_bytes(buf: bytes, start: int, end: int, media_type: str = "audio/mpeg") -> Response:
+    chunk = memoryview(buf)[start:end+1]
+    headers = {
+        "Content-Range": f"bytes {start}-{end}/{len(buf)}",
+        "Accept-Ranges": "bytes",
+        "Content-Length": str(len(chunk)),
+    }
+    return Response(content=chunk.tobytes(), status_code=206, media_type=media_type, headers=headers)
+
+def _full_bytes(buf: bytes, media_type: str = "audio/mpeg") -> Response:
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Content-Length": str(len(buf)),
+    }
+    return Response(content=buf, media_type=media_type, headers=headers)
+
+# =====================================================
+# Voice tests — STREAM (range-aware; recommended for frontend)
 # =====================================================
 @router.get("/voice-test/orion.stream", tags=["ai"])
-def voice_test_orion_stream():
+def voice_test_orion_stream(request: Request):
     text = "Hello, I am Orion. The Exclusivity platform is online and stable."
     audio = _tts_elevenlabs(text, ELEVEN_ORION) if (ELEVEN_API_KEY and ELEVEN_ORION) else _tts_openai(text, "alloy")
-    return Response(content=audio, media_type="audio/mpeg")
+    rng = _parse_range(request.headers.get("range"), len(audio))
+    if rng:
+        return _stream_bytes(audio, *rng)
+    return _full_bytes(audio)
 
 @router.get("/voice-test/lyric.stream", tags=["ai"])
-def voice_test_lyric_stream():
+def voice_test_lyric_stream(request: Request):
     text = "Hello, I am Lyric. All systems are active and synchronized."
     audio = _tts_elevenlabs(text, ELEVEN_LYRIC) if (ELEVEN_API_KEY and ELEVEN_LYRIC) else _tts_openai(text, "verse")
-    return Response(content=audio, media_type="audio/mpeg")
+    rng = _parse_range(request.headers.get("range"), len(audio))
+    if rng:
+        return _stream_bytes(audio, *rng)
+    return _full_bytes(audio)
 
 # =====================================================
-# Brand Intelligence (new, safe)
+# Brand Intelligence (safe)
 # =====================================================
 INIT_QUESTIONS: List[str] = [
     "Describe your brand in one sentence.",
