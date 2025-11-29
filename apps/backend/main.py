@@ -2,18 +2,15 @@
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi_utils.tasks import repeat_every
 import os, importlib, logging
 
-# Keepalive system
-from apps.backend.utils.keepalive import setup_keepalive
-
 log = logging.getLogger("uvicorn")
+
+# ---------------- APP ----------------
 app = FastAPI(title="Exclusivity API", version="1.0.0")
 
-
-# ----------------------------------------------------------
-# CORS
-# ----------------------------------------------------------
+# ---------------- CORS ----------------
 origins_env = os.getenv("CORS_ALLOW_ORIGINS", "").strip()
 allow_origins = [o.strip() for o in origins_env.split(",") if o.strip()]
 allow_origin_regex = None if allow_origins else r"^https://.*\.vercel\.app$|^http://localhost:3000$"
@@ -28,93 +25,77 @@ app.add_middleware(
     expose_headers=["*"],
 )
 
-
-# ----------------------------------------------------------
-# Health
-# ----------------------------------------------------------
 @app.get("/health")
 def health():
     return {"ok": True}
 
+# ---------------- KEEPALIVE ----------------
+# keepalive.py contains keep_supabase_alive, keep_render_alive, keep_vercel_alive
+try:
+    import apps.backend.keepalive as keepalive_module
 
-# ----------------------------------------------------------
-# Feature flag helper
-# ----------------------------------------------------------
+    @app.on_event("startup")
+    @repeat_every(seconds=300, wait_first=True)   # every 5 minutes
+    def keepalive():
+        keepalive_module.keep_supabase_alive()
+        keepalive_module.keep_render_alive()
+        keepalive_module.keep_vercel_alive()
+        log.info("[KEEPALIVE] Ping cycle completed.")
+
+except Exception as e:
+    log.error(f"[KEEPALIVE] Failed to load keepalive module: {e}")
+
+# ---------------- Helper: Feature Flags ----------------
 def enabled(name: str, default: str = "true") -> bool:
     return (os.getenv(name, default) or "").lower() == "true"
 
-
-# ----------------------------------------------------------
-# Safe dynamic router mounting
-# ----------------------------------------------------------
+# ---------------- Helper: Dynamic Router Loader ----------------
 def include_router_if_exists(module_path: str, attr: str = "router",
-                             prefix: str | None = None, tags: list[str] | None = None) -> bool:
+                             prefix: str | None = None, tags: list[str] | None = None):
     try:
-        mod = importlib.import_module(module_path)
-        router = getattr(mod, attr)
+        module = importlib.import_module(module_path)
+        router = getattr(module, attr)
         app.include_router(router, prefix=prefix or "", tags=tags or [])
-        log.info(f"[ROUTER] Mounted {module_path} at '{prefix or ''}'")
+        log.info(f"[ROUTER] Mounted {module_path}")
         return True
-    except Exception:
-        # silent on purpose (user prefers no logs)
+    except Exception as e:
+        log.info(f"[ROUTER] Skip {module_path} ({e})")
         return False
 
-
-# ----------------------------------------------------------
-# Root
-# ----------------------------------------------------------
 @app.get("/")
 def root():
     return {
         "status": "running",
         "routes_hint": [
-            "/health",
-            "/debug/routes",
-            "/voice/*",
-            "/ai/*",
-            "/merchant/*",
-            "/merchant/points/*",
-            "/loyalty/*",
-            "/shopify/*",
+            "/health", "/debug/routes",
+            "/voice/*", "/ai/*", "/merchant/*", "/loyalty/*", "/shopify/*"
         ]
     }
 
+# ---------------- ROUTERS ----------------
+include_router_if_exists("apps.backend.routes.supabase", prefix="/supabase", tags=["supabase"])
+include_router_if_exists("apps.backend.routes.blockchain", prefix="/blockchain", tags=["blockchain"])
+include_router_if_exists("apps.backend.routes.voice", prefix="/voice", tags=["voice"])
 
-# ----------------------------------------------------------
-# Always-on routers
-# ----------------------------------------------------------
-include_router_if_exists("apps.backend.routes.voice",          prefix="/voice",    tags=["voice"])
-include_router_if_exists("apps.backend.routes.ai",             prefix="/ai",       tags=["ai"])
-include_router_if_exists("apps.backend.routes.supabase_debug", prefix="",          tags=["debug"])
+if enabled("FEATURE_AI_BRAND_BRAIN", "true"):
+    include_router_if_exists("apps.backend.routes.ai", prefix="/ai", tags=["ai"])
 
-
-# ----------------------------------------------------------
-# Loyalty + Points + Merchant Engine
-# ----------------------------------------------------------
 if enabled("FEATURE_LOYALTY", "true"):
-    include_router_if_exists("apps.backend.routes.merchant",        prefix="/merchant",        tags=["merchant"])
-    include_router_if_exists("apps.backend.routes.merchant_points", prefix="/merchant/points", tags=["merchant-points"])
-    include_router_if_exists("apps.backend.routes.loyalty",         prefix="/loyalty",         tags=["loyalty"])
+    include_router_if_exists("apps.backend.routes.loyalty", prefix="/loyalty", tags=["loyalty"])
+    include_router_if_exists("apps.backend.routes.merchant", prefix="/merchant", tags=["merchant"])
 
-
-# ----------------------------------------------------------
-# Shopify embedded app + OAuth + Webhooks
-# ----------------------------------------------------------
 if enabled("FEATURE_SHOPIFY_EMBED", "true"):
     include_router_if_exists("apps.backend.routes.shopify", prefix="/shopify", tags=["shopify"])
 
+# ---------------- DEBUG ----------------
+@app.get("/debug/routes")
+def debug_routes():
+    return [
+        {"path": r.path, "name": r.name, "methods": list(r.methods or [])}
+        for r in app.router.routes
+    ]
 
-# ----------------------------------------------------------
-# KEEPALIVE SYSTEM — RUNS IMMEDIATELY ON STARTUP
-# ----------------------------------------------------------
-@app.on_event("startup")
-async def _startup_keepalive():
-    await setup_keepalive(app)  # silent auto-run scheduler
-
-
-# ----------------------------------------------------------
-# Local Dev Entrypoint
-# ----------------------------------------------------------
+# ---------------- MAIN ----------------
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("apps.backend.main:app", host="0.0.0.0", port=10000, reload=True)
+    uvicorn.run("apps.backend.main:app", host="0.0.0.0", port=int(os.getenv("PORT", "10000")), reload=True)
