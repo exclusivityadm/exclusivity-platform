@@ -2,7 +2,8 @@
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi_utils.tasks import repeat_every
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.interval import IntervalTrigger
 import os, importlib, logging
 
 log = logging.getLogger("uvicorn")
@@ -29,29 +30,65 @@ app.add_middleware(
 def health():
     return {"ok": True}
 
-# ---------------- KEEPALIVE ----------------
-# keepalive.py contains keep_supabase_alive, keep_render_alive, keep_vercel_alive
+# ---------------- KEEPALIVE (APScheduler) ----------------
+scheduler = AsyncIOScheduler()
+
 try:
     import apps.backend.keepalive as keepalive_module
+    _keepalive_available = True
+    log.info("[KEEPALIVE] keepalive module loaded.")
+except Exception as e:
+    keepalive_module = None  # type: ignore
+    _keepalive_available = False
+    log.error(f"[KEEPALIVE] Failed to load keepalive module: {e}")
 
-    @app.on_event("startup")
-    @repeat_every(seconds=300, wait_first=True)   # every 5 minutes
-    def keepalive():
+def keepalive_job():
+    """
+    Runs periodically to ping Supabase, Render, and Vercel.
+    Uses the same functions you already have in apps/backend/keepalive.py
+    """
+    if not _keepalive_available:
+        log.warning("[KEEPALIVE] keepalive module not available, skipping ping cycle.")
+        return
+    try:
         keepalive_module.keep_supabase_alive()
         keepalive_module.keep_render_alive()
         keepalive_module.keep_vercel_alive()
         log.info("[KEEPALIVE] Ping cycle completed.")
+    except Exception as e:
+        log.error(f"[KEEPALIVE] Error during keepalive ping cycle: {e}")
 
-except Exception as e:
-    log.error(f"[KEEPALIVE] Failed to load keepalive module: {e}")
+@app.on_event("startup")
+def start_scheduler():
+    """
+    Start APScheduler on app startup and schedule keepalive_job
+    to run every 5 minutes.
+    """
+    if not _keepalive_available:
+        log.warning("[KEEPALIVE] Scheduler not started because keepalive module is unavailable.")
+        return
+
+    # Replace existing job if this restarts
+    scheduler.add_job(
+        keepalive_job,
+        IntervalTrigger(minutes=5),
+        id="keepalive_job",
+        replace_existing=True,
+    )
+    scheduler.start()
+    log.info("[KEEPALIVE] APScheduler started (interval: 5 minutes).")
 
 # ---------------- Helper: Feature Flags ----------------
 def enabled(name: str, default: str = "true") -> bool:
     return (os.getenv(name, default) or "").lower() == "true"
 
 # ---------------- Helper: Dynamic Router Loader ----------------
-def include_router_if_exists(module_path: str, attr: str = "router",
-                             prefix: str | None = None, tags: list[str] | None = None):
+def include_router_if_exists(
+    module_path: str,
+    attr: str = "router",
+    prefix: str | None = None,
+    tags: list[str] | None = None,
+):
     try:
         module = importlib.import_module(module_path)
         router = getattr(module, attr)
@@ -67,9 +104,14 @@ def root():
     return {
         "status": "running",
         "routes_hint": [
-            "/health", "/debug/routes",
-            "/voice/*", "/ai/*", "/merchant/*", "/loyalty/*", "/shopify/*"
-        ]
+            "/health",
+            "/debug/routes",
+            "/voice/*",
+            "/ai/*",
+            "/merchant/*",
+            "/loyalty/*",
+            "/shopify/*",
+        ],
     }
 
 # ---------------- ROUTERS ----------------
@@ -98,4 +140,9 @@ def debug_routes():
 # ---------------- MAIN ----------------
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("apps.backend.main:app", host="0.0.0.0", port=int(os.getenv("PORT", "10000")), reload=True)
+    uvicorn.run(
+        "apps.backend.main:app",
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", "10000")),
+        reload=True,
+    )
