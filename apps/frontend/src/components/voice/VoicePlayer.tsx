@@ -4,104 +4,80 @@ import { useEffect, useState } from "react";
 
 type Speaker = "orion" | "lyric";
 type BackendStatus = "checking" | "online" | "offline";
-type ModeUsed = "none" | "stream" | "url";
 
 interface VoicePlayerProps {
   backendUrl: string;
 }
 
-const DEFAULT_ORION_TEXT = "Orion online and standing by.";
-const DEFAULT_LYRIC_TEXT = "Lyric online and ready.";
-
 export default function VoicePlayer({ backendUrl }: VoicePlayerProps) {
   const [backendStatus, setBackendStatus] = useState<BackendStatus>("checking");
   const [activeSpeaker, setActiveSpeaker] = useState<Speaker | null>(null);
-  const [message, setMessage] = useState("");
-  const [modeUsed, setModeUsed] = useState<ModeUsed>("none");
+  const [lastText, setLastText] = useState<string>("");
+  const [message, setMessage] = useState<string>("");
+
+  const baseUrl = backendUrl.replace(/\/+$/, "");
 
   // Health check
   useEffect(() => {
     const check = async () => {
       try {
-        const res = await fetch(`${backendUrl.replace(/\/+$/, "")}/health`);
+        const res = await fetch(`${baseUrl}/health`);
         setBackendStatus(res.ok ? "online" : "offline");
       } catch {
         setBackendStatus("offline");
       }
     };
     check();
-  }, [backendUrl]);
-
-  const speakerLabel = (speaker: Speaker) =>
-    speaker === "orion" ? "Orion" : "Lyric";
-
-  async function tryStreamingVoice(speaker: Speaker, text: string) {
-    const url = `${backendUrl.replace(/\/+$/, "")}/voice/stream`;
-
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ speaker, text }),
-    });
-
-    const contentType = res.headers.get("content-type") || "";
-
-    // If the endpoint doesn't exist or isn't audio, let the caller fall back
-    if (!res.ok || !contentType.includes("audio")) {
-      throw new Error(`Streaming not available (status ${res.status})`);
-    }
-
-    const blob = await res.blob();
-    const objectUrl = URL.createObjectURL(blob);
-    const audio = new Audio(objectUrl);
-    await audio.play();
-    setModeUsed("stream");
-  }
-
-  async function tryUrlVoice(speaker: Speaker, text: string) {
-    const url = `${backendUrl.replace(/\/+$/, "")}/voice`;
-
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ speaker, text }),
-    });
-
-    if (!res.ok) {
-      const errText = await res.text();
-      throw new Error(`Voice URL failed (${res.status}): ${errText}`);
-    }
-
-    const json = (await res.json()) as { audio_url?: string };
-    if (!json.audio_url) {
-      throw new Error("No audio_url found in response");
-    }
-
-    const audio = new Audio(json.audio_url);
-    await audio.play();
-    setModeUsed("url");
-  }
+  }, [baseUrl]);
 
   async function playVoice(speaker: Speaker) {
-    const text =
-      speaker === "orion" ? DEFAULT_ORION_TEXT : DEFAULT_LYRIC_TEXT;
+    if (backendStatus !== "online") return;
 
     try {
       setActiveSpeaker(speaker);
-      setMessage(`Calling ${speakerLabel(speaker)}…`);
+      setMessage(`Contacting ${speaker === "orion" ? "Orion" : "Lyric"}…`);
 
-      // 1) Try future streaming endpoint (safe even if it doesn't exist yet)
-      try {
-        await tryStreamingVoice(speaker, text);
-        setMessage(`${speakerLabel(speaker)} speaking (streaming) 🔊`);
-        return;
-      } catch (err) {
-        console.warn("Streaming unavailable, falling back to audio_url:", err);
+      const res = await fetch(`${baseUrl}/voice`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ speaker }),
+      });
+
+      if (!res.ok) {
+        const errText = await res.text();
+        throw new Error(`HTTP ${res.status}: ${errText}`);
       }
 
-      // 2) Fallback to current /voice JSON → audio_url
-      await tryUrlVoice(speaker, text);
-      setMessage(`${speakerLabel(speaker)} speaking (audio URL) 🔊`);
+      const json = (await res.json()) as {
+        speaker: string;
+        text?: string;
+        audio_base64: string;
+      };
+
+      const spokenText =
+        json.text ||
+        (speaker === "orion"
+          ? "Orion online, Exclusivity system synchronized."
+          : "Lyric ready and voice link confirmed.");
+
+      setLastText(spokenText);
+
+      // Decode base64 -> Blob -> Audio
+      const byteString = atob(json.audio_base64);
+      const len = byteString.length;
+      const bytes = new Uint8Array(len);
+      for (let i = 0; i < len; i++) {
+        bytes[i] = byteString.charCodeAt(i);
+      }
+
+      const blob = new Blob([bytes], { type: "audio/mpeg" });
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+
+      await audio.play();
+      setMessage(
+        `${speaker === "orion" ? "Orion" : "Lyric"} just spoke (AI generated).`
+      );
     } catch (e: any) {
       console.error(e);
       setMessage(`❌ Voice failed: ${e.message || "Unknown error"}`);
@@ -117,13 +93,6 @@ export default function VoicePlayer({ backendUrl }: VoicePlayerProps) {
       ? "#ef4444"
       : "#fbbf24";
 
-  const modeLabel =
-    modeUsed === "stream"
-      ? "Streaming"
-      : modeUsed === "url"
-      ? "Audio URL"
-      : "Not used yet";
-
   return (
     <section
       style={{
@@ -131,17 +100,17 @@ export default function VoicePlayer({ backendUrl }: VoicePlayerProps) {
         borderRadius: 16,
         background: "#020617",
         border: "1px solid #1e293b",
-        maxWidth: 560,
+        maxWidth: 600,
       }}
     >
-      {/* Backend + mode header */}
+      {/* Header: backend status */}
       <div
         style={{
           marginBottom: 16,
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
-          gap: 10,
+          gap: 12,
           fontSize: 14,
         }}
       >
@@ -165,8 +134,8 @@ export default function VoicePlayer({ backendUrl }: VoicePlayerProps) {
             </strong>
           </span>
         </div>
-        <div style={{ fontSize: 12, opacity: 0.7 }}>
-          Mode: <strong>{modeLabel}</strong>
+        <div style={{ fontSize: 11, opacity: 0.7 }}>
+          Endpoint: <code>/voice</code> (JSON + base64)
         </div>
       </div>
 
@@ -188,9 +157,9 @@ export default function VoicePlayer({ backendUrl }: VoicePlayerProps) {
               activeSpeaker === "orion"
                 ? "#1d4ed8"
                 : "linear-gradient(135deg, #2563eb, #38bdf8)",
-            color: "white",
-            opacity: backendStatus === "online" ? 1 : 0.5,
-            minWidth: 130,
+            color: "#ffffff",
+            opacity: backendStatus === "online" ? 1 : 0.6,
+            minWidth: 140,
           }}
         >
           {activeSpeaker === "orion" ? "Orion speaking…" : "Play Orion"}
@@ -212,32 +181,49 @@ export default function VoicePlayer({ backendUrl }: VoicePlayerProps) {
               activeSpeaker === "lyric"
                 ? "#15803d"
                 : "linear-gradient(135deg, #22c55e, #4ade80)",
-            color: "white",
-            opacity: backendStatus === "online" ? 1 : 0.5,
-            minWidth: 130,
+            color: "#ffffff",
+            opacity: backendStatus === "online" ? 1 : 0.6,
+            minWidth: 140,
           }}
         >
           {activeSpeaker === "lyric" ? "Lyric speaking…" : "Play Lyric"}
         </button>
       </div>
 
-      {/* Status / message */}
-      {message && (
+      {/* Last generated text */}
+      {lastText && (
         <div
           style={{
-            marginTop: 8,
+            marginTop: 4,
             padding: 10,
             borderRadius: 10,
             background: "#020617",
             border: "1px solid #1e293b",
             fontSize: 14,
+            whiteSpace: "pre-wrap",
+          }}
+        >
+          <strong>Last line:</strong> {lastText}
+        </div>
+      )}
+
+      {/* Status message */}
+      {message && (
+        <div
+          style={{
+            marginTop: 8,
+            padding: 8,
+            borderRadius: 8,
+            background: "#020617",
+            border: "1px solid #1e293b",
+            fontSize: 13,
+            opacity: 0.9,
           }}
         >
           {message}
         </div>
       )}
 
-      {/* Backend URL info */}
       <div
         style={{
           marginTop: 16,
@@ -246,11 +232,11 @@ export default function VoicePlayer({ backendUrl }: VoicePlayerProps) {
         }}
       >
         <div>
-          Backend URL: <code>{backendUrl}</code>
+          Backend URL: <code>{baseUrl}</code>
         </div>
         <div>
-          Tries <code>/voice/stream</code> first (if you add it later), then
-          falls back to <code>/voice</code> with <code>audio_url</code>.
+          Flow: <code>POST /voice → {{ "text", "audio_base64" }}</code> → decode
+          in browser → play.
         </div>
       </div>
     </section>
