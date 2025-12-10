@@ -1,65 +1,47 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 
-const BACKEND_URL =
-  process.env.NEXT_PUBLIC_BACKEND_URL?.replace(/\/+$/, "") ||
+const BACKEND =
+  process.env.NEXT_PUBLIC_BACKEND_URL ||
   "https://exclusivity-backend.onrender.com";
 
 export default function VoicePage() {
-  const [backendStatus, setBackendStatus] = useState<"checking" | "online" | "offline">("checking");
-  const [voiceBusy, setVoiceBusy] = useState<null | "orion" | "lyric">(null);
-  const [message, setMessage] = useState<string>("");
+  const [active, setActive] = useState<null | "orion" | "lyric">(null);
+  const [status, setStatus] = useState("");
 
-  // Ping backend /health route
-  useEffect(() => {
-    const check = async () => {
-      try {
-        const res = await fetch(`${BACKEND_URL}/health`);
-        if (res.ok) {
-          setBackendStatus("online");
-        } else {
-          setBackendStatus("offline");
-        }
-      } catch {
-        setBackendStatus("offline");
-      }
-    };
-    check();
-  }, []);
-
-  // Unified voice handler
-  async function playVoice(speaker: "orion" | "lyric") {
+  async function speak(speaker: "orion" | "lyric") {
     try {
-      setVoiceBusy(speaker);
-      setMessage(`Synthesizing ${speaker}...`);
+      setActive(speaker);
+      setStatus(`Contacting ${speaker}...`);
 
-      const res = await fetch(`${BACKEND_URL}/voice`, {
+      const res = await fetch(`${BACKEND}/voice/stream`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          speaker,
-          text: speaker === "orion" ? "Orion online and standing by." : "Lyric online and ready.",
-        }),
+        body: JSON.stringify({ speaker })
       });
 
-      if (!res.ok) {
-        const errText = await res.text();
-        throw new Error(`Error ${res.status}: ${errText}`);
+      if (!res.ok) throw new Error("Voice request failed.");
+
+      const reader = res.body?.getReader();
+      if (!reader) throw new Error("Stream unavailable");
+
+      const chunks: Uint8Array[] = [];
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
       }
 
-      const json = (await res.json()) as { audio_url?: string };
-      if (!json.audio_url) throw new Error("No audio URL returned by backend");
-
-      const audio = new Audio(json.audio_url);
+      const audio = new Audio(URL.createObjectURL(new Blob(chunks, { type: "audio/mpeg" })));
       await audio.play();
 
-      setMessage(`${speaker} voice played successfully ✅`);
+      setStatus(`${speaker} responded ✓`);
     } catch (e: any) {
-      console.error(e);
-      setMessage(`❌ ${e.message || "Voice request failed"}`);
+      setStatus("❌ Voice playback failed");
     } finally {
-      setVoiceBusy(null);
+      setActive(null);
     }
   }
 
@@ -70,115 +52,64 @@ export default function VoicePage() {
         background: "#0d0f14",
         color: "#f3f4f6",
         padding: "40px",
-        fontFamily: "Inter, sans-serif",
+        fontFamily: "Inter, sans-serif"
       }}
     >
-      <h1 style={{ fontSize: "1.8rem", fontWeight: 700, marginBottom: "20px" }}>
-        🎙️ AI Copilot Voice Tester
+      <h1 style={{ fontSize: 32, fontWeight: 700, marginBottom: 20 }}>
+        🎙️ Orion & Lyric — Voice Copilot Test
       </h1>
 
-      <div
-        style={{
-          marginBottom: 20,
-          padding: 16,
-          borderRadius: 12,
-          background: "#111318",
-          border: "1px solid #1f2430",
-          display: "flex",
-          alignItems: "center",
-          gap: 10,
-        }}
-      >
-        <span
-          style={{
-            width: 10,
-            height: 10,
-            borderRadius: "50%",
-            background:
-              backendStatus === "online"
-                ? "#22c55e"
-                : backendStatus === "offline"
-                ? "#ef4444"
-                : "#f59e0b",
-          }}
-        ></span>
-        <span>
-          Backend status:{" "}
-          <b>
-            {backendStatus === "checking"
-              ? "Checking..."
-              : backendStatus === "online"
-              ? "Online ✅"
-              : "Offline ❌"}
-          </b>
-        </span>
-      </div>
-
-      <div style={{ display: "flex", gap: 20 }}>
+      <div style={{ display: "flex", gap: 20, marginBottom: 30 }}>
         <button
-          disabled={voiceBusy !== null}
-          onClick={() => playVoice("orion")}
+          disabled={active !== null}
+          onClick={() => speak("orion")}
           style={{
-            padding: "12px 18px",
+            padding: "14px 22px",
             borderRadius: 10,
             border: "1px solid #1d4ed8",
-            background: voiceBusy === "orion" ? "#374151" : "#2563eb",
-            color: "white",
+            background: active === "orion" ? "#374151" : "#2563eb",
+            color: "#fff",
             fontWeight: 600,
-            cursor: "pointer",
+            cursor: "pointer"
           }}
         >
-          {voiceBusy === "orion" ? "Synthesizing…" : "Play Orion"}
+          {active === "orion" ? "Streaming…" : "Play Orion"}
         </button>
 
         <button
-          disabled={voiceBusy !== null}
-          onClick={() => playVoice("lyric")}
+          disabled={active !== null}
+          onClick={() => speak("lyric")}
           style={{
-            padding: "12px 18px",
+            padding: "14px 22px",
             borderRadius: 10,
             border: "1px solid #059669",
-            background: voiceBusy === "lyric" ? "#374151" : "#10b981",
-            color: "white",
+            background: active === "lyric" ? "#374151" : "#10b981",
+            color: "#fff",
             fontWeight: 600,
-            cursor: "pointer",
+            cursor: "pointer"
           }}
         >
-          {voiceBusy === "lyric" ? "Synthesizing…" : "Play Lyric"}
+          {active === "lyric" ? "Streaming…" : "Play Lyric"}
         </button>
       </div>
 
-      {message && (
+      {status && (
         <div
           style={{
-            marginTop: 20,
-            padding: "10px 14px",
+            background: "#1e293b",
+            padding: 15,
             borderRadius: 8,
-            background: "#1a1f2a",
-            border: "1px solid #2a2f3e",
-            fontSize: 14,
+            width: "fit-content",
+            border: "1px solid #334155"
           }}
         >
-          {message}
+          {status}
         </div>
       )}
 
-      <footer
-        style={{
-          marginTop: 40,
-          fontSize: 12,
-          opacity: 0.7,
-          borderTop: "1px solid #1e2430",
-          paddingTop: 20,
-        }}
-      >
-        <p>
-          Connected backend: <code>{BACKEND_URL}</code>
-        </p>
-        <p>
-          Uses the live <code>/voice</code> POST endpoint (ElevenLabs integration) for Orion and
-          Lyric.
-        </p>
+      <footer style={{ marginTop: 50, opacity: 0.6, fontSize: 12 }}>
+        <p>Backend: <code>{BACKEND}</code></p>
+        <p>Voice is generated dynamically via GPT → ElevenLabs → Stream</p>
       </footer>
     </main>
   );
