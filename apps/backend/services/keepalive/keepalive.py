@@ -1,61 +1,94 @@
 import os
+import logging
 import httpx
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from supabase import create_client, Client
 
-# --------------------------------------------------------
-# Multi-provider Keepalive Ping Scheduler
-#   - Supabase
-#   - Render backend
-#   - Vercel frontend
-# --------------------------------------------------------
+log = logging.getLogger("uvicorn")
 
-def schedule_keepalive(scheduler: AsyncIOScheduler, interval_seconds: int = 300):
+# ----------------------------------------------------------
+# ENVIRONMENT
+# ----------------------------------------------------------
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+
+RENDER_URL = os.getenv("KEEPALIVE_RENDER_URL", "").strip()
+VERCEL_URL = os.getenv("KEEPALIVE_VERCEL_URL", "").strip()
+
+# ----------------------------------------------------------
+# SUPABASE CLIENT (SERVICE ROLE)
+# ----------------------------------------------------------
+_supabase_client: Client | None = None
+
+def get_supabase() -> Client | None:
+    global _supabase_client
+    if _supabase_client is not None:
+        return _supabase_client
+
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        log.warning("[KEEPALIVE] Supabase env vars missing — cannot initialize client.")
+        return None
+
+    try:
+        _supabase_client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+        log.info("[KEEPALIVE] Supabase client initialized.")
+        return _supabase_client
+    except Exception as e:
+        log.error(f"[KEEPALIVE] Failed to initialize Supabase client: {e}")
+        return None
+
+
+# ----------------------------------------------------------
+# PING: SUPABASE (REAL DB ACTIVITY)
+# ----------------------------------------------------------
+def keep_supabase_alive():
     """
-    Pings all configured keepalive URLs every X seconds.
-    Completely safe: if a URL is missing, it is skipped.
+    Performs a real DB SELECT to guarantee Supabase registers activity.
     """
-
-    # You may configure ANY of these in Render / Vercel / local env:
-    # KEEPALIVE_SUPABASE_URL
-    # KEEPALIVE_RENDER_URL
-    # KEEPALIVE_VERCEL_URL
-    # KEEPALIVE_CUSTOM_1
-    # KEEPALIVE_CUSTOM_2
-
-    urls = [
-        os.getenv("KEEPALIVE_SUPABASE_URL"),
-        os.getenv("KEEPALIVE_RENDER_URL"),
-        os.getenv("KEEPALIVE_VERCEL_URL"),
-        os.getenv("KEEPALIVE_CUSTOM_1"),
-        os.getenv("KEEPALIVE_CUSTOM_2"),
-    ]
-
-    # Remove empty values
-    urls = [u for u in urls if u]
-
-    if not urls:
-        print("[keepalive] No keepalive URLs configured.")
+    client = get_supabase()
+    if client is None:
+        log.warning("[KEEPALIVE] Cannot ping Supabase — client not available.")
         return
 
-    print("[keepalive] Active URLs:")
-    for u in urls:
-        print("   →", u)
+    try:
+        # Use the lightest valid activity: a select on ANY public table
+        # Change 'profiles' to any table that always exists in your schema.
+        response = client.table("profiles").select("id").limit(1).execute()
+        log.info("[KEEPALIVE] Supabase ping OK.")
+    except Exception as e:
+        log.error(f"[KEEPALIVE] Supabase ping FAILED: {e}")
 
-    async def ping_all():
-        async with httpx.AsyncClient(timeout=10) as client:
-            for url in urls:
-                try:
-                    await client.get(url)
-                except Exception:
-                    # Always silent — keepalive should never crash the app
-                    pass
 
-    scheduler.add_job(
-        ping_all,
-        "interval",
-        seconds=interval_seconds,
-        id="keepalive_multi",
-        replace_existing=True,
-    )
+# ----------------------------------------------------------
+# PING: RENDER HEALTH
+# ----------------------------------------------------------
+def keep_render_alive():
+    """
+    Sends a GET request to Render to keep the backend container warm.
+    """
+    if not RENDER_URL:
+        log.debug("[KEEPALIVE] No Render URL configured.")
+        return
 
-    print(f"[keepalive] Scheduler registered, interval = {interval_seconds} seconds.")
+    try:
+        httpx.get(RENDER_URL, timeout=10)
+        log.info("[KEEPALIVE] Render ping OK.")
+    except Exception as e:
+        log.error(f"[KEEPALIVE] Render ping FAILED: {e}")
+
+
+# ----------------------------------------------------------
+# PING: VERCEL DEPLOYMENT
+# ----------------------------------------------------------
+def keep_vercel_alive():
+    """
+    Sends a GET request to Vercel frontend (if configured).
+    """
+    if not VERCEL_URL:
+        log.debug("[KEEPALIVE] No Vercel URL configured.")
+        return
+
+    try:
+        httpx.get(VERCEL_URL, timeout=10)
+        log.info("[KEEPALIVE] Vercel ping OK.")
+    except Exception as e:
+        log.error(f"[KEEPALIVE] Vercel ping FAILED: {e}")
