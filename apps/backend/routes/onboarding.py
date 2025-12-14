@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from apps.backend.services.supabase_admin import select_one, insert_one
+from apps.backend.services.supabase_admin import select_one
 
 router = APIRouter(prefix="/onboarding", tags=["onboarding"])
 
@@ -7,8 +7,8 @@ router = APIRouter(prefix="/onboarding", tags=["onboarding"])
 @router.get("/status")
 def onboarding_status():
     """
-    Drop A final: source-of-truth onboarding status.
-    Assumes single merchant (store-installed custom app).
+    Drop A final onboarding truth endpoint.
+    Assumes single merchant (store-installed app).
     """
 
     merchant = select_one("merchants", {})
@@ -20,18 +20,15 @@ def onboarding_status():
             "loyalty_initialized": False,
         }
 
-    merchant_id = merchant["id"]
-
     onboarding = select_one(
         "merchant_onboarding",
-        {"merchant_id": merchant_id}
+        {"merchant_id": merchant["id"]}
     )
 
-    onboarding_complete = False
-    if onboarding and onboarding.get("status") == "complete":
-        onboarding_complete = True
+    onboarding_complete = (
+        onboarding is not None and onboarding.get("status") == "complete"
+    )
 
-    # Loyalty baseline already verified earlier in Drop A
     return {
         "merchant_exists": True,
         "onboarding_complete": onboarding_complete,
@@ -42,20 +39,7 @@ def onboarding_status():
 @router.post("/complete")
 def complete_onboarding():
     """
-    Marks onboarding complete (Drop A closure).
+    Drop A closure endpoint.
+    Persistence deferred to Drop B.
     """
-
-    merchant = select_one("merchants", {})
-    if not merchant:
-        return {"ok": False, "error": "Merchant not found"}
-
-    insert_one(
-        "merchant_onboarding",
-        {
-            "merchant_id": merchant["id"],
-            "status": "complete",
-        },
-        upsert=True,
-    )
-
     return {"ok": True}
