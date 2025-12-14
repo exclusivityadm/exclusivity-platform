@@ -1,241 +1,92 @@
-# =====================================================
-# 🎙 Exclusivity Backend — AI & Voice Routes (range streaming + env report)
-# Env keys (required/optional):
-#   ELEVENLABS_API_KEY (req)
-#   ELEVENLABS_MODEL=eleven_multilingual_v2 (opt)
-#   ELEVENLABS_VOICE_ORION (req)
-#   ELEVENLABS_VOICE_LYRIC (req)
-#   OPENAI_API_KEY (opt, fallback TTS + chat)
-#   AI_MODEL_TTS=gpt-4o-mini-tts (opt)
-#   AI_MODEL_GPT=gpt-5.1 (opt; default used below)
-# Endpoints:
-#   GET  /ai/respond?prompt=...
-#   GET  /ai/voice-test/orion
-#   GET  /ai/voice-test/lyric
-#   GET  /ai/voice-test/orion.stream      -> audio/mpeg (range-aware)
-#   GET  /ai/voice-test/lyric.stream      -> audio/mpeg (range-aware)
-#   GET  /ai/init-questions
-#   POST /ai/init-answers
-#   GET  /ai/env-report                   -> masked runtime env check
-# =====================================================
+from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import Response
-from pydantic import BaseModel
-from typing import Dict, List, Optional, Tuple
-import os, base64, json, urllib.request, urllib.error
+import os
+from typing import Any, Dict, Optional, Literal
 
-router = APIRouter()
+import httpx
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 
-# ---------- Config (env) ----------
-ELEVEN_API_KEY     = os.getenv("ELEVENLABS_API_KEY")
-ELEVEN_MODEL       = os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2")
-ELEVEN_VOICE_ORION = os.getenv("ELEVENLABS_VOICE_ORION")
-ELEVEN_VOICE_LYRIC = os.getenv("ELEVENLABS_VOICE_LYRIC")
+from app.services.ai.ai_context_builder import AIContextBuilder, Persona
 
-OPENAI_KEY         = os.getenv("OPENAI_API_KEY")
-OPENAI_TTS_MODEL   = os.getenv("AI_MODEL_TTS", "gpt-4o-mini-tts")
-OPENAI_CHAT_MODEL  = os.getenv("AI_MODEL_GPT", "gpt-5.1")
 
-# Optional OpenAI client(s), fully guarded
-try:
-    from openai import OpenAI  # v1 client
-    _client = OpenAI()
-except Exception:
-    _client = None
-    try:
-        import openai  # legacy
-        openai.api_key = OPENAI_KEY
-    except Exception:
-        openai = None
+router = APIRouter(prefix="/ai", tags=["ai"])
 
-# ---------- Minimal HTTP helper (stdlib) ----------
-def _http_post_json(url: str, payload: Dict, headers: Dict[str, str], timeout: int = 30) -> bytes:
-    data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.read()
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", errors="ignore")
-        raise HTTPException(500, f"HTTP {e.code} {e.reason}: {body}")
-    except Exception as e:
-        raise HTTPException(500, f"Request error: {e}")
 
-# ---------- ElevenLabs TTS ----------
-def _tts_elevenlabs(text: str, voice_id: str) -> bytes:
-    if not ELEVEN_API_KEY or not voice_id:
-        raise HTTPException(500, "ElevenLabs not configured (missing ELEVENLABS_API_KEY or voice id)")
-    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream"
-    headers = {"xi-api-key": ELEVEN_API_KEY, "Content-Type": "application/json"}
-    payload = {
-        "text": text,
-        "model_id": ELEVEN_MODEL,
-        "voice_settings": {"stability": 0.5, "similarity_boost": 0.75},
-    }
-    return _http_post_json(url, payload, headers)
+class AIChatRequest(BaseModel):
+    persona: Persona = Field(default="orion")
+    message: str = Field(..., min_length=1)
 
-# ---------- OpenAI TTS (optional) ----------
-def _tts_openai(text: str, voice: str = "alloy") -> bytes:
-    if _client:
+    # The route should be given already-fetched merchant/program objects by upstream deps.
+    # For now, accept optional payloads to keep this structurally complete.
+    merchant: Dict[str, Any] = Field(default_factory=dict)
+    program: Dict[str, Any] = Field(default_factory=dict)
+
+
+class AIChatResponse(BaseModel):
+    persona: Persona
+    response: str
+
+
+def _get_openai_config() -> Dict[str, str]:
+    """
+    Minimal, self-contained OpenAI-compatible config.
+    If you already have a central LLM client, you can remove this and wire it in.
+    """
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").strip()
+    model = os.getenv("OPENAI_MODEL", "gpt-4.1-mini").strip()
+    if not api_key:
+        raise HTTPException(
+            status_code=501,
+            detail="AI is not configured (missing OPENAI_API_KEY).",
+        )
+    return {"api_key": api_key, "base_url": base_url, "model": model}
+
+
+@router.post("/chat", response_model=AIChatResponse)
+async def ai_chat(payload: AIChatRequest) -> AIChatResponse:
+    """
+    Canonical merchant-copilot endpoint.
+
+    Notes:
+    - Avoids crypto terms by policy in AIContextBuilder.
+    - Uses a minimal OpenAI-compatible call for structural completeness.
+    - Replace with your centralized LLM client if desired.
+    """
+    cfg = _get_openai_config()
+
+    builder = AIContextBuilder()
+    ctx = builder.build(
+        persona=payload.persona,
+        merchant=payload.merchant,
+        program=payload.program,
+        request_meta={"route": "/ai/chat"},
+    )
+
+    messages = ctx.to_messages(payload.message)
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
         try:
-            resp = _client.audio.speech.create(model=OPENAI_TTS_MODEL, voice=voice, input=text)
-            return resp.read()
-        except Exception as e:
-            raise HTTPException(500, f"OpenAI TTS error: {e}")
-    if 'openai' in globals() and openai:
-        try:
-            resp = openai.audio.speech.create(model=OPENAI_TTS_MODEL, voice=voice, input=text)  # type: ignore
-            return resp.read()
-        except Exception as e:
-            raise HTTPException(500, f"OpenAI TTS error: {e}")
-    raise HTTPException(500, "OpenAI TTS not available (package/key missing)")
-
-# =====================================================
-# Basic AI text response
-# =====================================================
-@router.get("/respond", tags=["ai"])
-def ai_respond(prompt: str = "Hello Orion!"):
-    if _client:
-        try:
-            c = _client.chat.completions.create(
-                model=OPENAI_CHAT_MODEL,
-                messages=[{"role": "user", "content": prompt}],
+            r = await client.post(
+                f"{cfg['base_url'].rstrip('/')}/chat/completions",
+                headers={"Authorization": f"Bearer {cfg['api_key']}"},
+                json={
+                    "model": cfg["model"],
+                    "messages": messages,
+                    "temperature": 0.4,
+                },
             )
-            return {"prompt": prompt, "response": c.choices[0].message.content}
-        except Exception as e:
-            raise HTTPException(500, str(e))
-    if 'openai' in globals() and openai:
-        try:
-            c = openai.chat.completions.create(  # type: ignore
-                model=OPENAI_CHAT_MODEL,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            return {"prompt": prompt, "response": c.choices[0].message.content}
-        except Exception as e:
-            raise HTTPException(500, str(e))
-    return {"prompt": prompt, "response": "OpenAI not configured; echo: " + prompt}
+        except httpx.RequestError as e:
+            raise HTTPException(status_code=502, detail=f"AI upstream error: {str(e)}") from e
 
-# =====================================================
-# Voice tests — JSON (base64 sample)
-# =====================================================
-@router.get("/voice-test/orion", tags=["ai"])
-def voice_test_orion():
-    text = "Hello, I am Orion. The Exclusivity platform is online and stable."
-    audio = _tts_elevenlabs(text, ELEVEN_VOICE_ORION) if ELEVEN_VOICE_ORION else _tts_openai(text, "alloy")
-    return {"speaker": "orion", "length_bytes": len(audio),
-            "audio_base64": base64.b64encode(audio).decode()[:80] + "..."}
+    if r.status_code >= 400:
+        raise HTTPException(status_code=502, detail=f"AI upstream returned {r.status_code}: {r.text}")
 
-@router.get("/voice-test/lyric", tags=["ai"])
-def voice_test_lyric():
-    text = "Hello, I am Lyric. All systems are active and synchronized."
-    audio = _tts_elevenlabs(text, ELEVEN_VOICE_LYRIC) if ELEVEN_VOICE_LYRIC else _tts_openai(text, "verse")
-    return {"speaker": "lyric", "length_bytes": len(audio),
-            "audio_base64": base64.b64encode(audio).decode()[:80] + "..."}
-
-# =====================================================
-# Range-aware streaming helpers (for <audio> tags)
-# =====================================================
-from typing import Tuple
-def _parse_range(range_header: Optional[str], total: int) -> Optional[Tuple[int, int]]:
-    if not range_header or not range_header.startswith("bytes="):
-        return None
+    data = r.json()
     try:
-        rng = range_header.split("=", 1)[1]
-        start_str, end_str = (rng.split("-", 1) + [""])[:2]
-        start = int(start_str) if start_str else 0
-        end = int(end_str) if end_str else total - 1
-        if start < 0 or end < start or end >= total:
-            return None
-        return (start, end)
+        content = data["choices"][0]["message"]["content"]
     except Exception:
-        return None
+        raise HTTPException(status_code=502, detail="AI response parsing failed.")
 
-def _stream_bytes(buf: bytes, start: int, end: int, media_type: str = "audio/mpeg") -> Response:
-    chunk = memoryview(buf)[start:end+1]
-    headers = {
-        "Content-Range": f"bytes {start}-{end}/{len(buf)}",
-        "Accept-Ranges": "bytes",
-        "Content-Length": str(len(chunk)),
-    }
-    return Response(content=chunk.tobytes(), status_code=206, media_type=media_type, headers=headers)
-
-def _full_bytes(buf: bytes, media_type: str = "audio/mpeg") -> Response:
-    headers = {
-        "Accept-Ranges": "bytes",
-        "Content-Length": str(len(buf)),
-    }
-    return Response(content=buf, media_type=media_type, headers=headers)
-
-# =====================================================
-# Voice tests — STREAM (range-aware; recommended for frontend)
-# =====================================================
-@router.get("/voice-test/orion.stream", tags=["ai"])
-def voice_test_orion_stream(request: Request):
-    text = "Hello, I am Orion. The Exclusivity platform is online and stable."
-    audio = _tts_elevenlabs(text, ELEVEN_VOICE_ORION) if ELEVEN_VOICE_ORION else _tts_openai(text, "alloy")
-    rng = _parse_range(request.headers.get("range"), len(audio))
-    if rng:
-        return _stream_bytes(audio, *rng)
-    return _full_bytes(audio)
-
-@router.get("/voice-test/lyric.stream", tags=["ai"])
-def voice_test_lyric_stream(request: Request):
-    text = "Hello, I am Lyric. All systems are active and synchronized."
-    audio = _tts_elevenlabs(text, ELEVEN_VOICE_LYRIC) if ELEVEN_VOICE_LYRIC else _tts_openai(text, "verse")
-    rng = _parse_range(request.headers.get("range"), len(audio))
-    if rng:
-        return _stream_bytes(audio, *rng)
-    return _full_bytes(audio)
-
-# =====================================================
-# Brand Intelligence (safe)
-# =====================================================
-INIT_QUESTIONS: List[str] = [
-    "Describe your brand in one sentence.",
-    "Who is your ideal customer?",
-    "Top 3 brand colors?",
-    "Typical order value & margin range?",
-    "Any words we should avoid in copy?",
-]
-
-@router.get("/init-questions", tags=["ai"])
-def init_questions():
-    return {"questions": INIT_QUESTIONS}
-
-class InitAnswersIn(BaseModel):
-    merchant_id: str
-    answers: Dict[str, str]
-
-@router.post("/init-answers", tags=["ai"])
-def save_init_answers(inb: InitAnswersIn):
-    tone_tags = list(inb.answers.keys())
-    return {"ok": True, "merchant_id": inb.merchant_id, "tone_tags": tone_tags}
-
-# =====================================================
-# Env report (masked) — to confirm runtime config names/values
-# =====================================================
-def _mask(s: Optional[str], show: int = 4) -> Optional[str]:
-    if not s:
-        return None
-    if len(s) <= show:
-        return "*" * len(s)
-    return "*" * (len(s) - show) + s[-show:]
-
-@router.get("/env-report", tags=["ai"])
-def env_report():
-    return {
-        "elevenlabs": {
-            "api_key_present": bool(ELEVEN_API_KEY),
-            "model": ELEVEN_MODEL,
-            "voice_orion_env": "ELEVENLABS_VOICE_ORION" if ELEVEN_VOICE_ORION else None,
-            "voice_lyric_env": "ELEVENLABS_VOICE_LYRIC" if ELEVEN_VOICE_LYRIC else None,
-        },
-        "openai": {
-            "api_key_present": bool(OPENAI_KEY),
-            "api_key_tail": _mask(OPENAI_KEY),
-            "chat_model": OPENAI_CHAT_MODEL,
-            "tts_model": OPENAI_TTS_MODEL,
-            "client_mode": "v1" if _client else ("legacy" if ('openai' in globals() and openai) else "none"),
-        }
-    }
+    return AIChatResponse(persona=payload.persona, response=content)
