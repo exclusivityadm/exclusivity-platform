@@ -15,8 +15,7 @@ router = APIRouter()
 @router.get("")
 def health_root():
     """
-    Generic app health check.
-    Mounted at /health
+    Mounted at: /health
     """
     return {"ok": True}
 
@@ -24,7 +23,7 @@ def health_root():
 @router.get("/loyalty")
 async def health_loyalty():
     """
-    Mounted at /health/loyalty
+    Mounted at: /health/loyalty
     """
     repo = LoyaltyRepository(create_supabase_client_from_env())
     return await loyalty_healthcheck(repo)
@@ -33,7 +32,7 @@ async def health_loyalty():
 @router.get("/keepalive")
 async def health_keepalive():
     """
-    Mounted at /health/keepalive
+    Mounted at: /health/keepalive
     """
     repo = LoyaltyRepository(create_supabase_client_from_env())
     return await run_keepalive(repo)
