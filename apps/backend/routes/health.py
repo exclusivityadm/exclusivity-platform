@@ -12,21 +12,28 @@ from health.keepalive_scheduler import run_keepalive
 router = APIRouter()
 
 
-@router.get("/health")
+@router.get("")
 def health_root():
     """
     Generic app health check.
+    Mounted at /health
     """
     return {"ok": True}
 
 
-@router.get("/health/loyalty")
+@router.get("/loyalty")
 async def health_loyalty():
+    """
+    Mounted at /health/loyalty
+    """
     repo = LoyaltyRepository(create_supabase_client_from_env())
     return await loyalty_healthcheck(repo)
 
 
-@router.get("/health/keepalive")
+@router.get("/keepalive")
 async def health_keepalive():
+    """
+    Mounted at /health/keepalive
+    """
     repo = LoyaltyRepository(create_supabase_client_from_env())
     return await run_keepalive(repo)
