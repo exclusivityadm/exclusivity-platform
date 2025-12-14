@@ -6,8 +6,11 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from app.repositories.loyalty_repository import LoyaltyRepository, create_supabase_client_from_env
-from app.services.loyalty.loyalty_service import LoyaltyService
+from apps.backend.repositories.loyalty_repository import (
+    LoyaltyRepository,
+    create_supabase_client_from_env,
+)
+from apps.backend.services.loyalty.loyalty_service import LoyaltyService
 
 
 router = APIRouter(prefix="/loyalty", tags=["loyalty"])
@@ -22,7 +25,9 @@ def get_loyalty_repo() -> LoyaltyRepository:
     return LoyaltyRepository(sb)
 
 
-def get_loyalty_service(repo: LoyaltyRepository = Depends(get_loyalty_repo)) -> LoyaltyService:
+def get_loyalty_service(
+    repo: LoyaltyRepository = Depends(get_loyalty_repo),
+) -> LoyaltyService:
     return LoyaltyService(repo)
 
 
@@ -97,7 +102,10 @@ async def put_policy(
     return PolicyResponse(policy=policy.to_dict())
 
 
-@router.get("/member/{merchant_id}/{member_ref}/status", response_model=MemberStatusResponse)
+@router.get(
+    "/member/{merchant_id}/{member_ref}/status",
+    response_model=MemberStatusResponse,
+)
 async def member_status(
     merchant_id: str,
     member_ref: str,
@@ -135,7 +143,10 @@ async def refund_adjust(
     svc: LoyaltyService = Depends(get_loyalty_service),
 ) -> Dict[str, Any]:
     if not payload.refund_line_amounts:
-        raise HTTPException(status_code=400, detail="refund_line_amounts cannot be empty")
+        raise HTTPException(
+            status_code=400,
+            detail="refund_line_amounts cannot be empty",
+        )
 
     result = await svc.adjust_for_refund(
         merchant_id=payload.merchant_id,
