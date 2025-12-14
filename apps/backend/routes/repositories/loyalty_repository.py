@@ -1,22 +1,10 @@
-"""
-Loyalty Repository (Canonical)
-==============================
-
-Single responsibility:
-- All Supabase DB access for Loyalty
-- NO business logic
-- NO FastAPI code
-
-This is the only place that knows table names.
-"""
-
 from __future__ import annotations
 
 import os
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
-from services.loyalty.points_ledger import LedgerEvent
+from apps.backend.services.loyalty.points_ledger import LedgerEvent
 
 
 class LoyaltyRepository:
@@ -33,9 +21,6 @@ class LoyaltyRepository:
         self.table_members = table_members
         self.table_events = table_events
 
-    # -------------------------------------------------
-    # Policy
-    # -------------------------------------------------
     async def get_policy_json(self, merchant_id: str) -> Optional[Dict[str, Any]]:
         r = (
             self.sb.table(self.table_policies)
@@ -45,18 +30,13 @@ class LoyaltyRepository:
             .execute()
         )
         data = getattr(r, "data", None)
-        if isinstance(data, dict):
-            return data.get("policy")
-        return None
+        return data.get("policy") if isinstance(data, dict) else None
 
     async def upsert_policy_json(self, merchant_id: str, policy_json: Dict[str, Any]) -> None:
         self.sb.table(self.table_policies).upsert(
             {"merchant_id": merchant_id, "policy": policy_json}
         ).execute()
 
-    # -------------------------------------------------
-    # Members
-    # -------------------------------------------------
     async def get_member_lifetime_spend(self, merchant_id: str, member_ref: str) -> Decimal:
         r = (
             self.sb.table(self.table_members)
@@ -67,39 +47,19 @@ class LoyaltyRepository:
             .execute()
         )
         data = getattr(r, "data", None)
-        if isinstance(data, dict):
-            return Decimal(str(data.get("lifetime_spend", "0.00")))
-        return Decimal("0.00")
+        return Decimal(str(data.get("lifetime_spend", "0.00"))) if isinstance(data, dict) else Decimal("0.00")
 
     async def increment_member_lifetime_spend(
-        self,
-        merchant_id: str,
-        member_ref: str,
-        amount: Decimal,
+        self, merchant_id: str, member_ref: str, amount: Decimal
     ) -> Decimal:
         current = await self.get_member_lifetime_spend(merchant_id, member_ref)
-        new_total = current + Decimal(amount or 0)
-        if new_total < Decimal("0.00"):
-            new_total = Decimal("0.00")
-
+        new_total = max(Decimal("0.00"), current + Decimal(amount or 0))
         self.sb.table(self.table_members).upsert(
-            {
-                "merchant_id": merchant_id,
-                "member_ref": member_ref,
-                "lifetime_spend": str(new_total),
-            }
+            {"merchant_id": merchant_id, "member_ref": member_ref, "lifetime_spend": str(new_total)}
         ).execute()
-
         return new_total
 
-    # -------------------------------------------------
-    # Ledger
-    # -------------------------------------------------
-    async def list_ledger_events(
-        self,
-        merchant_id: str,
-        member_ref: str,
-    ) -> List[LedgerEvent]:
+    async def list_ledger_events(self, merchant_id: str, member_ref: str) -> List[LedgerEvent]:
         r = (
             self.sb.table(self.table_events)
             .select("*")
@@ -111,32 +71,11 @@ class LoyaltyRepository:
         rows = getattr(r, "data", None) or []
         return [self._row_to_event(row) for row in rows if isinstance(row, dict)]
 
-    async def list_order_earn_events(
-        self,
-        merchant_id: str,
-        member_ref: str,
-        order_id: str,
-    ) -> List[LedgerEvent]:
-        r = (
-            self.sb.table(self.table_events)
-            .select("*")
-            .eq("merchant_id", merchant_id)
-            .eq("member_ref", member_ref)
-            .eq("event_type", "earn")
-            .eq("related_ref", order_id)
-            .execute()
-        )
-        rows = getattr(r, "data", None) or []
-        return [self._row_to_event(row) for row in rows if isinstance(row, dict)]
-
     async def append_ledger_events(
-        self,
-        merchant_id: str,
-        events: List[LedgerEvent],
+        self, merchant_id: str, events: List[LedgerEvent]
     ) -> Dict[str, Any]:
         if not events:
             return {"inserted": 0}
-
         payload = [
             {
                 "merchant_id": merchant_id,
@@ -153,13 +92,9 @@ class LoyaltyRepository:
             }
             for e in events
         ]
-
         r = self.sb.table(self.table_events).insert(payload).execute()
         return {"inserted": len(getattr(r, "data", None) or [])}
 
-    # -------------------------------------------------
-    # Helpers
-    # -------------------------------------------------
     @staticmethod
     def _row_to_event(row: Dict[str, Any]) -> LedgerEvent:
         return LedgerEvent(
@@ -176,20 +111,10 @@ class LoyaltyRepository:
         )
 
 
-# -------------------------------------------------
-# Supabase client factory (canonical)
-# -------------------------------------------------
 def create_supabase_client_from_env() -> Any:
     url = os.getenv("SUPABASE_URL", "").strip()
-    key = (
-        os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-        or os.getenv("SUPABASE_ANON_KEY")
-        or ""
-    ).strip()
-
+    key = (os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_ANON_KEY") or "").strip()
     if not url or not key:
         raise RuntimeError("Supabase env vars not set")
-
     from supabase import create_client  # type: ignore
-
     return create_client(url, key)
