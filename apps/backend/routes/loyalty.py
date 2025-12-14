@@ -6,11 +6,11 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from repositories.loyalty_repository import (
+from .repositories.loyalty_repository import (
     LoyaltyRepository,
     create_supabase_client_from_env,
 )
-from services.loyalty.loyalty_service import LoyaltyService
+from .services.loyalty.loyalty_service import LoyaltyService
 
 
 router = APIRouter(prefix="/loyalty", tags=["loyalty"])
