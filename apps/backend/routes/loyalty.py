@@ -6,11 +6,11 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from apps.backend.repositories.loyalty_repository import (
+from repositories.loyalty_repository import (
     LoyaltyRepository,
     create_supabase_client_from_env,
 )
-from apps.backend.services.loyalty.loyalty_service import LoyaltyService
+from services.loyalty.loyalty_service import LoyaltyService
 
 
 router = APIRouter(prefix="/loyalty", tags=["loyalty"])
@@ -18,7 +18,6 @@ router = APIRouter(prefix="/loyalty", tags=["loyalty"])
 
 # -----------------------------
 # Dependency wiring (minimal)
-# Replace with your canonical DI later
 # -----------------------------
 def get_loyalty_repo() -> LoyaltyRepository:
     sb = create_supabase_client_from_env()
@@ -62,8 +61,6 @@ class AwardOrderRequest(BaseModel):
     currency: str = "USD"
     discounts_total: Decimal = Decimal("0.00")
     lines: List[OrderLineIn] = Field(default_factory=list)
-
-    # Optional explicit lifetime spend increment (recommended to reflect actual paid amount)
     lifetime_spend_increment: Optional[Decimal] = None
 
 
@@ -72,11 +69,7 @@ class RefundAdjustRequest(BaseModel):
     order_id: str
     refund_id: str
     member_ref: str
-
-    # Mapping: line_id -> refunded eligible amount (currency)
     refund_line_amounts: Dict[str, Decimal] = Field(default_factory=dict)
-
-    # Lifetime spend is lifetime by default; this stays False unless explicitly chosen
     decrement_lifetime_spend: bool = False
 
 
@@ -123,7 +116,7 @@ async def award_order(
     if not payload.lines:
         raise HTTPException(status_code=400, detail="Order must include at least one line")
 
-    result = await svc.award_for_order(
+    return await svc.award_for_order(
         merchant_id=payload.merchant_id,
         order_id=payload.order_id,
         member_ref=payload.member_ref,
@@ -134,7 +127,6 @@ async def award_order(
         event_id_prefix="earn",
         idempotency_prefix="idem:earn",
     )
-    return result
 
 
 @router.post("/order/refund")
@@ -148,7 +140,7 @@ async def refund_adjust(
             detail="refund_line_amounts cannot be empty",
         )
 
-    result = await svc.adjust_for_refund(
+    return await svc.adjust_for_refund(
         merchant_id=payload.merchant_id,
         order_id=payload.order_id,
         refund_id=payload.refund_id,
@@ -158,4 +150,3 @@ async def refund_adjust(
         event_id_prefix="refund",
         idempotency_prefix="idem:refund",
     )
-    return result
