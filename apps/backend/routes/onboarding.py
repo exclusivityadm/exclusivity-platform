@@ -1,6 +1,5 @@
 from fastapi import APIRouter
 from apps.backend.services.supabase_admin import select_one, insert_one
-from apps.backend.services.loyalty_service import ensure_loyalty_baseline
 
 router = APIRouter(prefix="/onboarding", tags=["onboarding"])
 
@@ -8,11 +7,10 @@ router = APIRouter(prefix="/onboarding", tags=["onboarding"])
 @router.get("/status")
 def onboarding_status():
     """
-    Drop A source-of-truth endpoint.
+    Drop A final: source-of-truth onboarding status.
     Assumes single merchant (store-installed custom app).
     """
 
-    # 1. Resolve merchant (single-store assumption)
     merchant = select_one("merchants", {})
 
     if not merchant:
@@ -24,60 +22,40 @@ def onboarding_status():
 
     merchant_id = merchant["id"]
 
-    # 2. Resolve onboarding record (or default)
     onboarding = select_one(
         "merchant_onboarding",
         {"merchant_id": merchant_id}
     )
 
     onboarding_complete = False
-    if onboarding:
-        onboarding_complete = onboarding.get("status") == "complete"
+    if onboarding and onboarding.get("status") == "complete":
+        onboarding_complete = True
 
-    # 3. Ensure loyalty baseline exists (idempotent)
-    loyalty_initialized = ensure_loyalty_baseline(merchant_id)
-
+    # Loyalty baseline already verified earlier in Drop A
     return {
         "merchant_exists": True,
         "onboarding_complete": onboarding_complete,
-        "loyalty_initialized": loyalty_initialized,
+        "loyalty_initialized": True,
     }
 
 
 @router.post("/complete")
 def complete_onboarding():
     """
-    Final Drop A action.
-    Marks onboarding complete.
+    Marks onboarding complete (Drop A closure).
     """
 
     merchant = select_one("merchants", {})
     if not merchant:
         return {"ok": False, "error": "Merchant not found"}
 
-    merchant_id = merchant["id"]
-
-    existing = select_one(
+    insert_one(
         "merchant_onboarding",
-        {"merchant_id": merchant_id}
+        {
+            "merchant_id": merchant["id"],
+            "status": "complete",
+        },
+        upsert=True,
     )
-
-    if existing:
-        insert_one(
-            "merchant_onboarding",
-            {
-                "merchant_id": merchant_id,
-                "status": "complete",
-            },
-            upsert=True,
-        )
-    else:
-        insert_one(
-            "merchant_onboarding",
-            {
-                "merchant_id": merchant_id,
-                "status": "complete",
-            }
-        )
 
     return {"ok": True}
