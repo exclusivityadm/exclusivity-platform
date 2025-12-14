@@ -10,11 +10,13 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 # ------------------------------------------------------------
-# Make routes/ the application root
+# Make routes/ the import root
 # ------------------------------------------------------------
 BACKEND_ROOT = Path(__file__).resolve().parent
-if str(BACKEND_ROOT) not in sys.path:
-    sys.path.insert(0, str(BACKEND_ROOT))
+ROUTES_ROOT = BACKEND_ROOT / "routes"
+
+if str(ROUTES_ROOT) not in sys.path:
+    sys.path.insert(0, str(ROUTES_ROOT))
 
 log = logging.getLogger("uvicorn")
 
