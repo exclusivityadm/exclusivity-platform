@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+print(">>> LOADED routes/health.py FROM:", __file__)
+
 from fastapi import APIRouter
 
 from repositories.loyalty_repository import (
@@ -10,6 +12,8 @@ from health_checks.loyalty_healthcheck import loyalty_healthcheck
 from health_checks.keepalive_scheduler import run_keepalive
 
 router = APIRouter()
+
+print(">>> ROUTER OBJECT ID:", id(router))
 
 
 @router.get("")
