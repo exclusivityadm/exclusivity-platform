@@ -45,16 +45,17 @@ def _mount(module_path: str):
     except Exception as e:
         log.info(f"[ROUTER] Skip {module_path} ({e})")
 
-# Existing routers (keep your current ones)
+# Routers
 _mount("apps.backend.routes.voice")
 _mount("apps.backend.routes.ai")
-_mount("apps.backend.routes.loyalty")      # our new loyalty
-_mount("apps.backend.routes.onboarding")   # our new onboarding
-_mount("apps.backend.routes.shopify")      # our new shopify
-
-# Keep any other routers you already had (safe no-op if missing)
+_mount("apps.backend.routes.loyalty")
+_mount("apps.backend.routes.onboarding")
+_mount("apps.backend.routes.shopify")
 _mount("apps.backend.routes.supabase")
 _mount("apps.backend.routes.blockchain")
+
+# DROP B: Shadow Wallet Engine
+_mount("apps.backend.routes.wallets")
 
 if __name__ == "__main__":
     import uvicorn
