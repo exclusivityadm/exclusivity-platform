@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { completeOnboarding } from "@/app/lib/api";
+import { completeOnboarding } from "../lib/api";
 
 export default function OnboardingPage() {
   const router = useRouter();
