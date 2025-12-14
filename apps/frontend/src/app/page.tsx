@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { SETTINGS } from "@/lib/settings";
+import { SETTINGS } from "@/app/lib/settings";
 
 export default function Home() {
   const router = useRouter();
