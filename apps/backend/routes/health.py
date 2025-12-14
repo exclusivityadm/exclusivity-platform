@@ -6,8 +6,8 @@ from repositories.loyalty_repository import (
     LoyaltyRepository,
     create_supabase_client_from_env,
 )
-from health.loyalty_healthcheck import loyalty_healthcheck
-from health.keepalive_scheduler import run_keepalive
+from health_checks.loyalty_healthcheck import loyalty_healthcheck
+from health_checks.keepalive_scheduler import run_keepalive
 
 router = APIRouter()
 
