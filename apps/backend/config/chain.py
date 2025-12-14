@@ -1,0 +1,9 @@
+import os
+
+CHAIN_ENABLED = os.getenv("CHAIN_ENABLED", "false").lower() == "true"
+
+BASE_CHAIN_ID = int(os.getenv("BASE_CHAIN_ID", "8453"))
+ALCHEMY_BASE_HTTP = os.getenv("ALCHEMY_BASE_HTTP")
+
+AURYM_CONTRACT_ADDRESS = os.getenv("AURYM_CONTRACT_ADDRESS")
+AURYM_MINTER_PRIVATE_KEY = os.getenv("AURYM_MINTER_PRIVATE_KEY")
