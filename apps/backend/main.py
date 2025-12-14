@@ -10,17 +10,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 # ------------------------------------------------------------
-# CRITICAL: Ensure backend root is on sys.path
+# Make routes/ the application root
 # ------------------------------------------------------------
 BACKEND_ROOT = Path(__file__).resolve().parent
-PROJECT_ROOT = BACKEND_ROOT.parent.parent  # repo root
+if str(BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(BACKEND_ROOT))
 
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
-# ------------------------------------------------------------
-# App setup
-# ------------------------------------------------------------
 log = logging.getLogger("uvicorn")
 
 app = FastAPI(title="Exclusivity API", version="1.0.0")
@@ -43,62 +38,31 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
-    expose_headers=["*"],
 )
 
-# ------------------------------------------------------------
-# Core routes
-# ------------------------------------------------------------
 @app.get("/")
 def root():
-    return {"ok": True, "service": "exclusivity-backend"}
-
-
-@app.get("/health")
-def health():
     return {"ok": True}
 
+@app.get("/health")
+def base_health():
+    return {"ok": True}
 
-@app.get("/debug/routes")
-def debug_routes():
-    return [
-        {"path": getattr(r, "path", None), "name": getattr(r, "name", None)}
-        for r in app.router.routes
-    ]
-
-
-# ------------------------------------------------------------
-# Router loader
-# ------------------------------------------------------------
-def _mount(module_path: str):
+def _mount(module: str):
     try:
-        mod = importlib.import_module(module_path)
+        mod = importlib.import_module(module)
         app.include_router(mod.router)
-        log.info(f"[ROUTER] Mounted {module_path}")
+        log.info(f"[ROUTER] Mounted {module}")
     except Exception as e:
-        log.info(f"[ROUTER] Skip {module_path} ({e})")
+        log.info(f"[ROUTER] Skip {module} ({e})")
 
-
-# ---- ROUTES (ORDERED, EXPLICIT) ----
-_mount("apps.backend.routes.voice")
-_mount("apps.backend.routes.ai")
-_mount("apps.backend.routes.loyalty")
-_mount("apps.backend.routes.onboarding")
-_mount("apps.backend.routes.shopify")
-_mount("apps.backend.routes.settings")
-_mount("apps.backend.routes.supabase")
-_mount("apps.backend.routes.blockchain")
-_mount("apps.backend.routes.health")
-
-# ------------------------------------------------------------
-# Local dev entry
-# ------------------------------------------------------------
-if __name__ == "__main__":
-    import uvicorn
-
-    uvicorn.run(
-        "apps.backend.main:app",
-        host="0.0.0.0",
-        port=int(os.getenv("PORT", "10000")),
-        reload=True,
-    )
+# ---- ROUTES ----
+_mount("routes.voice")
+_mount("routes.ai")
+_mount("routes.loyalty")
+_mount("routes.health")
+_mount("routes.onboarding")
+_mount("routes.shopify")
+_mount("routes.settings")
+_mount("routes.supabase")
+_mount("routes.blockchain")
