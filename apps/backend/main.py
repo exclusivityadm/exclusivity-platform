@@ -1,22 +1,8 @@
-from __future__ import annotations
-
-import os
-import sys
-import importlib
-import logging
-from pathlib import Path
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-
-# ------------------------------------------------------------
-# Make routes/ the import root
-# ------------------------------------------------------------
-BACKEND_ROOT = Path(__file__).resolve().parent
-ROUTES_ROOT = BACKEND_ROOT / "routes"
-
-if str(ROUTES_ROOT) not in sys.path:
-    sys.path.insert(0, str(ROUTES_ROOT))
+import os
+import importlib
+import logging
 
 log = logging.getLogger("uvicorn")
 
@@ -44,27 +30,36 @@ app.add_middleware(
 
 @app.get("/")
 def root():
-    return {"ok": True}
+    return {"ok": True, "service": "exclusivity-backend"}
 
 @app.get("/health")
-def base_health():
+def health():
     return {"ok": True}
 
-def _mount(module: str):
+def _mount(module_path: str):
     try:
-        mod = importlib.import_module(module)
+        mod = importlib.import_module(module_path)
         app.include_router(mod.router)
-        log.info(f"[ROUTER] Mounted {module}")
+        log.info(f"[ROUTER] Mounted {module_path}")
     except Exception as e:
-        log.info(f"[ROUTER] Skip {module} ({e})")
+        log.info(f"[ROUTER] Skip {module_path} ({e})")
 
-# ---- ROUTES ----
-_mount("routes.voice")
-_mount("routes.ai")
-_mount("routes.loyalty")
-_mount("routes.health")
-_mount("routes.onboarding")
-_mount("routes.shopify")
-_mount("routes.settings")
-_mount("routes.supabase")
-_mount("routes.blockchain")
+# ---- ROUTES (CANONICAL) ----
+_mount("apps.backend.routes.voice")
+_mount("apps.backend.routes.ai")
+_mount("apps.backend.routes.loyalty")
+_mount("apps.backend.routes.health")
+_mount("apps.backend.routes.onboarding")
+_mount("apps.backend.routes.shopify")
+_mount("apps.backend.routes.settings")
+_mount("apps.backend.routes.supabase")
+_mount("apps.backend.routes.blockchain")
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(
+        "apps.backend.main:app",
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", "10000")),
+        reload=True,
+    )
