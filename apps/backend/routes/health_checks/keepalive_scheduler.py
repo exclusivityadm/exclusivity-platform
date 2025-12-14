@@ -1,12 +1,27 @@
 from __future__ import annotations
-from typing import Dict, Any
 
-from apps.backend.health_checks.loyalty_healthcheck import loyalty_healthcheck
-from apps.backend.repositories.loyalty_repository import LoyaltyRepository
+import asyncio
+import httpx
+import os
 
 
-async def run_keepalive(repo: LoyaltyRepository) -> Dict[str, Any]:
-    return {
-        "keepalive": True,
-        "health": await loyalty_healthcheck(repo),
-    }
+async def run_keepalive() -> None:
+    """
+    Non-destructive keepalive pings.
+    Safe to call repeatedly.
+    """
+
+    urls = []
+
+    supabase_url = os.getenv("SUPABASE_URL")
+    if supabase_url:
+        urls.append(supabase_url)
+
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        for url in urls:
+            try:
+                await client.get(url)
+            except Exception:
+                pass
+
+    await asyncio.sleep(0)
