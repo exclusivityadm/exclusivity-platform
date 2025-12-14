@@ -11,7 +11,11 @@ app = FastAPI(title="Exclusivity API", version="1.0.0")
 # --- CORS
 allow_origins = []
 if os.getenv("CORS_ALLOW_ORIGINS"):
-    allow_origins = [o.strip() for o in os.getenv("CORS_ALLOW_ORIGINS", "").split(",") if o.strip()]
+    allow_origins = [
+        o.strip()
+        for o in os.getenv("CORS_ALLOW_ORIGINS", "").split(",")
+        if o.strip()
+    ]
 
 allow_origin_regex = None if allow_origins else r"^https://.*\.vercel\.app$|^http://localhost:3000$"
 
@@ -35,7 +39,10 @@ def health():
 
 @app.get("/debug/routes")
 def debug_routes():
-    return [{"path": getattr(r, "path", None), "name": getattr(r, "name", None)} for r in app.router.routes]
+    return [
+        {"path": getattr(r, "path", None), "name": getattr(r, "name", None)}
+        for r in app.router.routes
+    ]
 
 def _mount(module_path: str):
     try:
@@ -45,17 +52,15 @@ def _mount(module_path: str):
     except Exception as e:
         log.info(f"[ROUTER] Skip {module_path} ({e})")
 
-# Routers
+# ---- ROUTES (ORDERED, EXPLICIT) ----
 _mount("apps.backend.routes.voice")
 _mount("apps.backend.routes.ai")
 _mount("apps.backend.routes.loyalty")
 _mount("apps.backend.routes.onboarding")
 _mount("apps.backend.routes.shopify")
+_mount("apps.backend.routes.settings")   # Drop D
 _mount("apps.backend.routes.supabase")
 _mount("apps.backend.routes.blockchain")
-
-# DROP B: Shadow Wallet Engine
-_mount("apps.backend.routes.wallets")
 
 if __name__ == "__main__":
     import uvicorn
