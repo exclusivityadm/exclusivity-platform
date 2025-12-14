@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, Optional, Literal
+from typing import Any, Dict
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from app.services.ai.ai_context_builder import AIContextBuilder, Persona
+from apps.backend.services.ai.ai_context_builder import AIContextBuilder, Persona
 
 
 router = APIRouter(prefix="/ai", tags=["ai"])
@@ -36,11 +36,13 @@ def _get_openai_config() -> Dict[str, str]:
     api_key = os.getenv("OPENAI_API_KEY", "").strip()
     base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").strip()
     model = os.getenv("OPENAI_MODEL", "gpt-4.1-mini").strip()
+
     if not api_key:
         raise HTTPException(
             status_code=501,
             detail="AI is not configured (missing OPENAI_API_KEY).",
         )
+
     return {"api_key": api_key, "base_url": base_url, "model": model}
 
 
