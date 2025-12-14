@@ -1,42 +1,29 @@
 from __future__ import annotations
 
-print(">>> LOADED routes/health.py FROM:", __file__)
-
 from fastapi import APIRouter
 
-from repositories.loyalty_repository import (
+from apps.backend.repositories.loyalty_repository import (
     LoyaltyRepository,
     create_supabase_client_from_env,
 )
-from health_checks.loyalty_healthcheck import loyalty_healthcheck
-from health_checks.keepalive_scheduler import run_keepalive
+from apps.backend.health_checks.loyalty_healthcheck import loyalty_healthcheck
+from apps.backend.health_checks.keepalive_scheduler import run_keepalive
 
 router = APIRouter()
-
-print(">>> ROUTER OBJECT ID:", id(router))
 
 
 @router.get("")
 def health_root():
-    """
-    Mounted at: /health
-    """
     return {"ok": True}
 
 
 @router.get("/loyalty")
 async def health_loyalty():
-    """
-    Mounted at: /health/loyalty
-    """
     repo = LoyaltyRepository(create_supabase_client_from_env())
     return await loyalty_healthcheck(repo)
 
 
 @router.get("/keepalive")
 async def health_keepalive():
-    """
-    Mounted at: /health/keepalive
-    """
     repo = LoyaltyRepository(create_supabase_client_from_env())
     return await run_keepalive(repo)
