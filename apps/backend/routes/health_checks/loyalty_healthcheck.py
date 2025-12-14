@@ -1,31 +1,43 @@
 from __future__ import annotations
+
 from typing import Dict, Any
-from decimal import Decimal
 
-from apps.backend.repositories.loyalty_repository import LoyaltyRepository
+from ..repositories.loyalty_repository import create_supabase_client_from_env
 
 
-async def loyalty_healthcheck(repo: LoyaltyRepository) -> Dict[str, Any]:
-    checks = {"policies": False, "members": False, "ledger": False}
+async def loyalty_healthcheck() -> Dict[str, Any]:
+    """
+    Lightweight health check for loyalty subsystem.
+    Verifies:
+    - Supabase connectivity
+    - Required tables are accessible
+    """
 
-    try:
-        await repo.get_policy_json("__health__")
-        checks["policies"] = True
-    except Exception as e:
-        checks["policies_error"] = str(e)
+    sb = create_supabase_client_from_env()
 
-    try:
-        val = await repo.get_member_lifetime_spend("__health__", "__health__")
-        if isinstance(val, Decimal):
-            checks["members"] = True
-    except Exception as e:
-        checks["members_error"] = str(e)
+    checks = {}
 
     try:
-        events = await repo.list_ledger_events("__health__", "__health__")
-        if isinstance(events, list):
-            checks["ledger"] = True
-    except Exception as e:
-        checks["ledger_error"] = str(e)
+        sb.table("loyalty_policies").select("id").limit(1).execute()
+        checks["loyalty_policies"] = True
+    except Exception:
+        checks["loyalty_policies"] = False
 
-    return {"ok": all(checks.values()), "checks": checks}
+    try:
+        sb.table("loyalty_members").select("id").limit(1).execute()
+        checks["loyalty_members"] = True
+    except Exception:
+        checks["loyalty_members"] = False
+
+    try:
+        sb.table("loyalty_ledger").select("id").limit(1).execute()
+        checks["loyalty_ledger"] = True
+    except Exception:
+        checks["loyalty_ledger"] = False
+
+    ok = all(checks.values())
+
+    return {
+        "ok": ok,
+        "checks": checks,
+    }
