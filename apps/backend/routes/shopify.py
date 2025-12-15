@@ -1,13 +1,11 @@
 from fastapi import APIRouter
 
-from .services.shopify.shopify_service import ShopifyService
-
+from .services.shopify_webhooks import ShopifyWebhooksService
 
 router = APIRouter(prefix="/shopify", tags=["shopify"])
-
-service = ShopifyService()
+service = ShopifyWebhooksService()
 
 
 @router.post("/webhook")
-async def shopify_webhook(payload: dict):
-    return await service.handle_webhook(payload)
+async def webhook(payload: dict):
+    return await service.handle(payload)
