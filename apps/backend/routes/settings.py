@@ -1,10 +1,8 @@
 from fastapi import APIRouter
 
-from .services.settings.settings_service import SettingsService
-
+from .services.settings import SettingsService
 
 router = APIRouter(prefix="/settings", tags=["settings"])
-
 service = SettingsService()
 
 
