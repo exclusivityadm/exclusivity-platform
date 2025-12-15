@@ -4,7 +4,7 @@ import os
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
-from ..services.points import LedgerEvent
+from ..services.ledger import LedgerEvent
 
 
 class LoyaltyRepository:
