@@ -1,36 +1,38 @@
-from fastapi import APIRouter, HTTPException
+from __future__ import annotations
+
 import os
-from apps.backend.config.voice_static import ORION_LINES, LYRIC_LINES
+from typing import Dict
 
-router = APIRouter(prefix="/voice-test", tags=["voice"])
+import httpx
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
 
-VOICE_ENABLED = os.getenv("VOICE_ENABLED", "false").lower() == "true"
-
-
-def _guard():
-    if not VOICE_ENABLED:
-        raise HTTPException(status_code=404, detail="Voice disabled")
+from .services.voice.voice_service import VoiceService
 
 
-@router.get("/orion")
-def orion_voice():
-    _guard()
-    return {"ok": True, "voice": "orion", "line": ORION_LINES["greeting"]}
+router = APIRouter(prefix="/voice", tags=["voice"])
+
+service = VoiceService()
 
 
-@router.get("/lyric")
-def lyric_voice():
-    _guard()
-    return {"ok": True, "voice": "lyric", "line": LYRIC_LINES["greeting"]}
+class VoiceRequest(BaseModel):
+    text: str = Field(..., min_length=1)
+    voice: str = Field(default="default")
 
 
-@router.post("/orion")
-def orion_confirm():
-    _guard()
-    return {"ok": True, "voice": "orion", "line": ORION_LINES["confirm"]}
+class VoiceResponse(BaseModel):
+    ok: bool
+    audio_url: str
 
 
-@router.post("/lyric")
-def lyric_confirm():
-    _guard()
-    return {"ok": True, "voice": "lyric", "line": LYRIC_LINES["confirm"]}
+@router.post("/speak", response_model=VoiceResponse)
+async def speak(payload: VoiceRequest) -> VoiceResponse:
+    try:
+        audio_url = await service.synthesize(
+            text=payload.text,
+            voice=payload.voice,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return VoiceResponse(ok=True, audio_url=audio_url)
