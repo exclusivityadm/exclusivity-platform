@@ -4,7 +4,7 @@ import os
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
-from apps.backend.services.loyalty.points_ledger import LedgerEvent
+from ..services.points import LedgerEvent
 
 
 class LoyaltyRepository:
@@ -21,6 +21,9 @@ class LoyaltyRepository:
         self.table_members = table_members
         self.table_events = table_events
 
+    # -----------------------------
+    # Policy
+    # -----------------------------
     async def get_policy_json(self, merchant_id: str) -> Optional[Dict[str, Any]]:
         r = (
             self.sb.table(self.table_policies)
@@ -37,6 +40,9 @@ class LoyaltyRepository:
             {"merchant_id": merchant_id, "policy": policy_json}
         ).execute()
 
+    # -----------------------------
+    # Member spend
+    # -----------------------------
     async def get_member_lifetime_spend(self, merchant_id: str, member_ref: str) -> Decimal:
         r = (
             self.sb.table(self.table_members)
@@ -59,6 +65,9 @@ class LoyaltyRepository:
         ).execute()
         return new_total
 
+    # -----------------------------
+    # Ledger
+    # -----------------------------
     async def list_ledger_events(self, merchant_id: str, member_ref: str) -> List[LedgerEvent]:
         r = (
             self.sb.table(self.table_events)
@@ -76,6 +85,7 @@ class LoyaltyRepository:
     ) -> Dict[str, Any]:
         if not events:
             return {"inserted": 0}
+
         payload = [
             {
                 "merchant_id": merchant_id,
@@ -92,6 +102,7 @@ class LoyaltyRepository:
             }
             for e in events
         ]
+
         r = self.sb.table(self.table_events).insert(payload).execute()
         return {"inserted": len(getattr(r, "data", None) or [])}
 
@@ -116,5 +127,6 @@ def create_supabase_client_from_env() -> Any:
     key = (os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_ANON_KEY") or "").strip()
     if not url or not key:
         raise RuntimeError("Supabase env vars not set")
+
     from supabase import create_client  # type: ignore
     return create_client(url, key)
