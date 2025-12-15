@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from .health_checks.loyalty_healthcheck import loyalty_healthcheck
 from .health_checks.keepalive_scheduler import run_keepalive
 
+
 router = APIRouter(prefix="/health", tags=["health"])
 
 
