@@ -7,7 +7,8 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from .services.ai.ai_context_builder import AIContextBuilder, Persona
+from .services.ai_brand_brain import AIBrandBrain
+from .orion import Persona
 
 
 router = APIRouter(prefix="/ai", tags=["ai"])
@@ -16,69 +17,19 @@ router = APIRouter(prefix="/ai", tags=["ai"])
 class AIChatRequest(BaseModel):
     persona: Persona = Field(default=Persona.ORION)
     message: str = Field(..., min_length=1)
-
     merchant: Dict[str, Any] = Field(default_factory=dict)
     program: Dict[str, Any] = Field(default_factory=dict)
 
 
-class AIChatResponse(BaseModel):
-    persona: Persona
-    response: str
-
-
-def _get_openai_config() -> Dict[str, str]:
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
-    base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").strip()
-    model = os.getenv("OPENAI_MODEL", "gpt-4.1-mini").strip()
-
+@router.post("/chat")
+async def ai_chat(payload: AIChatRequest):
+    api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
-        raise HTTPException(
-            status_code=501,
-            detail="AI is not configured (missing OPENAI_API_KEY).",
-        )
+        raise HTTPException(status_code=501, detail="AI not configured")
 
-    return {
-        "api_key": api_key,
-        "base_url": base_url,
-        "model": model,
-    }
-
-
-@router.post("/chat", response_model=AIChatResponse)
-async def ai_chat(payload: AIChatRequest) -> AIChatResponse:
-    cfg = _get_openai_config()
-
-    builder = AIContextBuilder()
-    ctx = builder.build(
-        persona=payload.persona,
+    brain = AIBrandBrain(persona=payload.persona)
+    return await brain.respond(
+        message=payload.message,
         merchant=payload.merchant,
         program=payload.program,
-        request_meta={"route": "/ai/chat"},
     )
-
-    messages = ctx.to_messages(payload.message)
-
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        try:
-            r = await client.post(
-                f"{cfg['base_url'].rstrip('/')}/chat/completions",
-                headers={"Authorization": f"Bearer {cfg['api_key']}"},
-                json={
-                    "model": cfg["model"],
-                    "messages": messages,
-                    "temperature": 0.4,
-                },
-            )
-        except httpx.RequestError as e:
-            raise HTTPException(status_code=502, detail=str(e)) from e
-
-    if r.status_code >= 400:
-        raise HTTPException(status_code=502, detail=r.text)
-
-    data = r.json()
-    try:
-        content = data["choices"][0]["message"]["content"]
-    except Exception:
-        raise HTTPException(status_code=502, detail="AI response parsing failed")
-
-    return AIChatResponse(persona=payload.persona, response=content)
