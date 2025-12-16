@@ -123,6 +123,7 @@ def root():
         "routes_hint": [
             "/health",
             "/debug/routes",
+            "/core/*",
             "/voice/*",
             "/ai/*",
             "/merchant/*",
@@ -134,6 +135,8 @@ def root():
 # ----------------------------------------------------------
 # ROUTES
 # ----------------------------------------------------------
+include_router_if_exists("apps.backend.routes.core", prefix="/core", tags=["core"])
+
 include_router_if_exists("apps.backend.routes.supabase", prefix="/supabase", tags=["supabase"])
 include_router_if_exists("apps.backend.routes.blockchain", prefix="/blockchain", tags=["blockchain"])
 include_router_if_exists("apps.backend.routes.voice", prefix="/voice", tags=["voice"])
