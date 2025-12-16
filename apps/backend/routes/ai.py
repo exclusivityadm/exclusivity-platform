@@ -1,29 +1,24 @@
 # =====================================================
 # 🎙 Exclusivity Backend — AI & Voice Routes (range streaming + env report)
-# Env keys (required/optional):
-#   ELEVENLABS_API_KEY (req)
-#   ELEVENLABS_MODEL=eleven_multilingual_v2 (opt)
-#   ELEVENLABS_VOICE_ORION (req)
-#   ELEVENLABS_VOICE_LYRIC (req)
-#   OPENAI_API_KEY (opt, fallback TTS + chat)
-#   AI_MODEL_TTS=gpt-4o-mini-tts (opt)
-#   AI_MODEL_GPT=gpt-5.1 (opt; default used below)
-# Endpoints:
+# Endpoints (preserved + hardened):
 #   GET  /ai/respond?prompt=...
+#   POST /ai/chat                          -> {persona, message}
 #   GET  /ai/voice-test/orion
 #   GET  /ai/voice-test/lyric
-#   GET  /ai/voice-test/orion.stream      -> audio/mpeg (range-aware)
-#   GET  /ai/voice-test/lyric.stream      -> audio/mpeg (range-aware)
+#   GET  /ai/voice-test/orion.stream       -> audio/mpeg (range-aware)
+#   GET  /ai/voice-test/lyric.stream       -> audio/mpeg (range-aware)
 #   GET  /ai/init-questions
 #   POST /ai/init-answers
-#   GET  /ai/env-report                   -> masked runtime env check
+#   GET  /ai/env-report                    -> masked runtime env check
 # =====================================================
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import Response
+from fastapi.responses import Response, JSONResponse
 from pydantic import BaseModel
 from typing import Dict, List, Optional, Tuple
 import os, base64, json, urllib.request, urllib.error
+
+from apps.backend.services.ai.hardening import chat as hardened_chat
 
 router = APIRouter()
 
@@ -37,7 +32,7 @@ OPENAI_KEY         = os.getenv("OPENAI_API_KEY")
 OPENAI_TTS_MODEL   = os.getenv("AI_MODEL_TTS", "gpt-4o-mini-tts")
 OPENAI_CHAT_MODEL  = os.getenv("AI_MODEL_GPT", "gpt-5.1")
 
-# Optional OpenAI client(s), fully guarded
+# Optional OpenAI client(s), fully guarded (used only for TTS fallback here)
 try:
     from openai import OpenAI  # v1 client
     _client = OpenAI()
@@ -92,29 +87,32 @@ def _tts_openai(text: str, voice: str = "alloy") -> bytes:
     raise HTTPException(500, "OpenAI TTS not available (package/key missing)")
 
 # =====================================================
-# Basic AI text response
+# Basic AI text response (HARDENED)
 # =====================================================
 @router.get("/respond", tags=["ai"])
 def ai_respond(prompt: str = "Hello Orion!"):
-    if _client:
-        try:
-            c = _client.chat.completions.create(
-                model=OPENAI_CHAT_MODEL,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            return {"prompt": prompt, "response": c.choices[0].message.content}
-        except Exception as e:
-            raise HTTPException(500, str(e))
-    if 'openai' in globals() and openai:
-        try:
-            c = openai.chat.completions.create(  # type: ignore
-                model=OPENAI_CHAT_MODEL,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            return {"prompt": prompt, "response": c.choices[0].message.content}
-        except Exception as e:
-            raise HTTPException(500, str(e))
-    return {"prompt": prompt, "response": "OpenAI not configured; echo: " + prompt}
+    # Preserve old response shape, but route through hardening
+    res = hardened_chat(persona="orion", message=prompt)
+    if not res.get("ok"):
+        # Preserve stability: never 500 with a raw stack for simple respond
+        return {"prompt": prompt, "response": f"{res.get('message')}"}
+    return {"prompt": prompt, "response": res.get("reply")}
+
+class ChatIn(BaseModel):
+    persona: str = "orion"   # "orion" | "lyric"
+    message: str
+    # context reserved for later drops (kept out-of-scope for now)
+
+@router.post("/chat", tags=["ai"])
+async def ai_chat(inb: ChatIn):
+    """
+    Production chat surface for Orion/Lyric.
+    Deterministic envelopes; no crypto language; transparent failures.
+    """
+    res = hardened_chat(persona=inb.persona, message=inb.message)
+    if res.get("ok"):
+        return JSONResponse(content=res, status_code=200)
+    return JSONResponse(content=res, status_code=int(res.get("status_code") or 500))
 
 # =====================================================
 # Voice tests — JSON (base64 sample)
@@ -136,7 +134,6 @@ def voice_test_lyric():
 # =====================================================
 # Range-aware streaming helpers (for <audio> tags)
 # =====================================================
-from typing import Tuple
 def _parse_range(range_header: Optional[str], total: int) -> Optional[Tuple[int, int]]:
     if not range_header or not range_header.startswith("bytes="):
         return None
