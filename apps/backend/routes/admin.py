@@ -10,7 +10,8 @@ from apps.backend.services.admin.overrides import (
 )
 from apps.backend.services.admin.observability import system_snapshot
 
-router = APIRouter(prefix="/admin", tags=["admin"])
+# ❌ NO prefix here — mounted in main.py
+router = APIRouter(tags=["admin"])
 
 class OverrideIn(BaseModel):
     key: str
