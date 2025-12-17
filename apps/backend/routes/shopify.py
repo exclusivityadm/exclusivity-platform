@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
-router = APIRouter(prefix="/shopify", tags=["shopify"])
+# ❌ NO prefix here — mounted in main.py
+router = APIRouter(tags=["shopify"])
 
 
 @router.post("/webhook")
