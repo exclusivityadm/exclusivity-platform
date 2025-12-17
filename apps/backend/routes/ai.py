@@ -22,15 +22,10 @@ from apps.backend.services.ai.hardening import chat as hardened_chat
 
 router = APIRouter()
 
-# ---------- Config (env) ----------
-ELEVEN_API_KEY     = os.getenv("ELEVENLABS_API_KEY")
-ELEVEN_MODEL       = os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2")
-ELEVEN_VOICE_ORION = os.getenv("ELEVENLABS_VOICE_ORION")
-ELEVEN_VOICE_LYRIC = os.getenv("ELEVENLABS_VOICE_LYRIC")
 
-OPENAI_KEY         = os.getenv("OPENAI_API_KEY")
-OPENAI_TTS_MODEL   = os.getenv("AI_MODEL_TTS", "gpt-4o-mini-tts")
-OPENAI_CHAT_MODEL  = os.getenv("AI_MODEL_GPT", "gpt-5.1")
+class AIChatRequest(BaseModel):
+    persona: Persona = Field(default=Persona.ORION)
+    message: str = Field(..., min_length=1)
 
 # Optional OpenAI client(s), fully guarded (used only for TTS fallback here)
 try:
@@ -222,17 +217,7 @@ def _mask(s: Optional[str], show: int = 4) -> Optional[str]:
 @router.get("/env-report", tags=["ai"])
 def env_report():
     return {
-        "elevenlabs": {
-            "api_key_present": bool(ELEVEN_API_KEY),
-            "model": ELEVEN_MODEL,
-            "voice_orion_env": "ELEVENLABS_VOICE_ORION" if ELEVEN_VOICE_ORION else None,
-            "voice_lyric_env": "ELEVENLABS_VOICE_LYRIC" if ELEVEN_VOICE_LYRIC else None,
-        },
-        "openai": {
-            "api_key_present": bool(OPENAI_KEY),
-            "api_key_tail": _mask(OPENAI_KEY),
-            "chat_model": OPENAI_CHAT_MODEL,
-            "tts_model": OPENAI_TTS_MODEL,
-            "client_mode": "v1" if _client else ("legacy" if ('openai' in globals() and openai) else "none"),
-        }
+        "ok": True,
+        "persona": payload.persona,
+        "response": "AI service not yet wired",
     }
