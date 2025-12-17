@@ -3,8 +3,8 @@ from __future__ import annotations
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
-
-router = APIRouter(prefix="/voice", tags=["voice"])
+# ❌ NO prefix here — mounted in main.py
+router = APIRouter(tags=["voice"])
 
 
 class VoiceRequest(BaseModel):
