@@ -1,4 +1,4 @@
-# Exclusivity v1 – Final Rebuild
+# Exclusivity v1 – Final Rebuild 
 
 - FastAPI backend (modular routers)
 - Next.js 14 app-dir frontend (TS)

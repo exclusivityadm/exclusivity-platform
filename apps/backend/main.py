@@ -1,18 +1,16 @@
 # apps/backend/main.py
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.interval import IntervalTrigger
 import os
 import importlib
 import logging
+import time
+
+from apps.backend.services.admin.logger import log_request_response
 
 log = logging.getLogger("uvicorn")
 
-# ----------------------------------------------------------
-# APP
-# ----------------------------------------------------------
 app = FastAPI(title="Exclusivity API", version="1.0.0")
 
 # ----------------------------------------------------------
@@ -33,76 +31,26 @@ app.add_middleware(
 )
 
 # ----------------------------------------------------------
-# HEALTH CHECK
+# ADMIN LOGGING MIDDLEWARE
+# ----------------------------------------------------------
+@app.middleware("http")
+async def admin_logger_middleware(request: Request, call_next):
+    start = time.time()
+    response: Response = await call_next(request)
+    await log_request_response(request, response, start)
+    return response
+
+# ----------------------------------------------------------
+# HEALTH
 # ----------------------------------------------------------
 @app.get("/health")
 def health():
     return {"ok": True}
 
-# ----------------------------------------------------------
-# KEEPALIVE (APScheduler)
-# ----------------------------------------------------------
-scheduler = AsyncIOScheduler()
-
-try:
-    # definitive correct location
-    import apps.backend.services.keepalive as keepalive_module
-    _keepalive_available = True
-    log.info("[KEEPALIVE] keepalive module loaded from services.keepalive")
-except Exception as e:
-    keepalive_module = None
-    _keepalive_available = False
-    log.error(f"[KEEPALIVE] Failed to load keepalive module: {e}")
-
-def keepalive_job():
-    """
-    Runs periodically to ping Supabase, Render, and Vercel.
-    """
-    if not _keepalive_available:
-        log.warning("[KEEPALIVE] keepalive module unavailable, skipping ping cycle.")
-        return
-
-    try:
-        keepalive_module.keep_supabase_alive()
-        keepalive_module.keep_render_alive()
-        keepalive_module.keep_vercel_alive()
-        log.info("[KEEPALIVE] Ping cycle completed.")
-    except Exception as e:
-        log.error(f"[KEEPALIVE] Error in ping cycle: {e}")
-
-@app.on_event("startup")
-def start_scheduler():
-    """
-    Start APScheduler on startup with a 5-minute interval.
-    """
-    if not _keepalive_available:
-        log.warning("[KEEPALIVE] Scheduler not started — keepalive module missing.")
-        return
-
-    scheduler.add_job(
-        keepalive_job,
-        IntervalTrigger(minutes=5),
-        id="keepalive_job",
-        replace_existing=True
-    )
-    scheduler.start()
-    log.info("[KEEPALIVE] APScheduler started (runs every 5 minutes).")
-
-# ----------------------------------------------------------
-# FEATURE FLAGS
-# ----------------------------------------------------------
 def enabled(name: str, default: str = "true") -> bool:
     return (os.getenv(name, default) or "").lower() == "true"
 
-# ----------------------------------------------------------
-# ROUTER LOADER
-# ----------------------------------------------------------
-def include_router_if_exists(
-    module_path: str,
-    attr: str = "router",
-    prefix: str | None = None,
-    tags: list[str] | None = None
-):
+def include_router_if_exists(module_path: str, attr: str = "router", prefix: str | None = None, tags: list[str] | None = None):
     try:
         module = importlib.import_module(module_path)
         router = getattr(module, attr)
@@ -113,29 +61,15 @@ def include_router_if_exists(
         log.info(f"[ROUTER] Skip {module_path} ({e})")
         return False
 
-# ----------------------------------------------------------
-# ROOT ENDPOINT
-# ----------------------------------------------------------
 @app.get("/")
 def root():
-    return {
-        "status": "running",
-        "routes_hint": [
-            "/health",
-            "/debug/routes",
-            "/core/*",
-            "/voice/*",
-            "/ai/*",
-            "/merchant/*",
-            "/loyalty/*",
-            "/shopify/*",
-        ],
-    }
+    return {"status": "running"}
 
 # ----------------------------------------------------------
 # ROUTES
 # ----------------------------------------------------------
-include_router_if_exists("apps.backend.routes.core", prefix="/core", tags=["core"])
+include_router_if_exists("apps.backend.routes.admin", prefix="/admin", tags=["admin"])
+include_router_if_exists("apps.backend.routes.monetize", prefix="", tags=["monetize"])
 
 include_router_if_exists("apps.backend.routes.supabase", prefix="/supabase", tags=["supabase"])
 include_router_if_exists("apps.backend.routes.blockchain", prefix="/blockchain", tags=["blockchain"])
@@ -151,24 +85,15 @@ if enabled("FEATURE_LOYALTY", "true"):
 if enabled("FEATURE_SHOPIFY_EMBED", "true"):
     include_router_if_exists("apps.backend.routes.shopify", prefix="/shopify", tags=["shopify"])
 
-# ----------------------------------------------------------
-# DEBUG ROUTES
-# ----------------------------------------------------------
 @app.get("/debug/routes")
 def debug_routes():
-    return [
-        {"path": r.path, "name": r.name, "methods": list(r.methods or [])}
-        for r in app.router.routes
-    ]
+    return [{"path": r.path, "name": r.name, "methods": list(r.methods or [])} for r in app.router.routes]
 
-# ----------------------------------------------------------
-# MAIN ENTRY
-# ----------------------------------------------------------
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
         "apps.backend.main:app",
         host="0.0.0.0",
         port=int(os.getenv("PORT", "10000")),
-        reload=True
+        reload=True,
     )

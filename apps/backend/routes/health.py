@@ -1,16 +1,23 @@
 from fastapi import APIRouter
-from fastapi.responses import JSONResponse
-import os
 
-# ❌ Remove prefix here — it’s already set in main.py
-router = APIRouter(tags=["Health"])
+from .health_checks.loyalty_healthcheck import loyalty_healthcheck
+from .health_checks.keepalive_scheduler import run_keepalive
 
-@router.get("/")
-async def health_check():
-    """Simple health endpoint to verify backend is live."""
-    data = {
-        "status": "ok",
-        "environment": os.getenv("ENVIRONMENT", "production"),
-        "backend": "Exclusivity Backend Operational",
-    }
-    return JSONResponse(content=data)
+
+router = APIRouter(prefix="/health", tags=["health"])
+
+
+@router.get("")
+def health_root():
+    return {"ok": True}
+
+
+@router.get("/loyalty")
+async def health_loyalty():
+    return await loyalty_healthcheck()
+
+
+@router.get("/keepalive")
+async def health_keepalive():
+    await run_keepalive()
+    return {"ok": True}

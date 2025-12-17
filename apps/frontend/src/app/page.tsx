@@ -1,197 +1,20 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
+import { SETTINGS } from "./lib/settings";
 
-type Json = Record<string, any>;
-
-const BACKEND_URL =
-  process.env.NEXT_PUBLIC_BACKEND_URL?.replace(/\/+$/, "") ||
-  "http://127.0.0.1:8000";
-
-type FetchState<T> = {
-  loading: boolean;
-  error: string | null;
-  data: T | null;
-};
-
-function useFetch<T = any>(path: string | null, deps: any[] = []) {
-  const [state, setState] = useState<FetchState<T>>({
-    loading: !!path,
-    error: null,
-    data: null,
-  });
-
-  const url = useMemo(() => (path ? `${BACKEND_URL}${path}` : null), [path]);
+export default function Home() {
+  const router = useRouter();
 
   useEffect(() => {
-    let cancelled = false;
-    if (!url) return;
-
-    setState({ loading: true, error: null, data: null });
-    fetch(url, { cache: "no-store" })
-      .then(async (r) => {
-        if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
-        return r.json() as Promise<T>;
-      })
-      .then((data) => {
-        if (!cancelled) setState({ loading: false, error: null, data });
-      })
-      .catch((err: any) => {
-        if (!cancelled)
-          setState({ loading: false, error: String(err), data: null });
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, deps.concat(url));
-
-  return state;
-}
-
-function Card(props: {
-  title: string;
-  children?: React.ReactNode;
-  footer?: React.ReactNode;
-}) {
-  return (
-    <div
-      style={{
-        background: "#111318",
-        border: "1px solid #1f2430",
-        borderRadius: 16,
-        padding: 16,
-        width: "100%",
-      }}
-    >
-      <div style={{ fontSize: 18, fontWeight: 600, marginBottom: 8 }}>
-        {props.title}
-      </div>
-      <div style={{ fontSize: 14, lineHeight: 1.6 }}>{props.children}</div>
-      {props.footer ? (
-        <div style={{ marginTop: 12, opacity: 0.9 }}>{props.footer}</div>
-      ) : null}
-    </div>
-  );
-}
-
-export default function Page() {
-  const health = useFetch<Json>("/health", []);
-  const [voiceBusy, setVoiceBusy] = useState<null | "orion" | "lyric">(null);
-
-  const callVoice = useCallback(async (speaker: "orion" | "lyric") => {
-    try {
-      const text =
-        speaker === "orion"
-          ? "Orion online — Exclusivity systems synchronized."
-          : "Lyric ready — voice link confirmed.";
-
-      const res = await fetch(`${BACKEND_URL}/voice`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ speaker, text }),
-      });
-
-      if (!res.ok) {
-        const errText = await res.text();
-        throw new Error(`${res.status} ${res.statusText} — ${errText}`);
-      }
-
-      const data = await res.json();
-      if (data?.audio_base64) {
-        const audio = new Audio(`data:audio/mpeg;base64,${data.audio_base64}`);
-        await audio.play();
-        console.log(`✅ ${speaker} voice playback started`);
-      } else {
-        throw new Error("No audio data returned");
-      }
-    } catch (e: any) {
-      console.error("Voice error:", e);
-      alert(`Voice error: ${e?.message || e}`);
+    if (!SETTINGS.betaMode) {
+      router.push("/maintenance");
+      return;
     }
-  }, []);
 
-  const handleVoice = async (who: "orion" | "lyric") => {
-    setVoiceBusy(who);
-    await callVoice(who);
-    setVoiceBusy(null);
-  };
+    router.push("/onboarding");
+  }, [router]);
 
-  return (
-    <main style={{ padding: 24 }}>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 12,
-          marginBottom: 18,
-        }}
-      >
-        <div
-          style={{
-            width: 10,
-            height: 10,
-            borderRadius: 999,
-            background: health.data ? "#22c55e" : "#ef4444",
-            boxShadow: "0 0 10px rgba(34,197,94,0.6)",
-          }}
-        />
-        <div style={{ fontSize: 20, fontWeight: 700 }}>
-          Exclusivity — Merchant Console
-        </div>
-        <div
-          style={{
-            marginLeft: "auto",
-            fontSize: 13,
-            opacity: 0.8,
-          }}
-        >
-          Backend: <code>{BACKEND_URL}</code>
-        </div>
-      </div>
-
-      <Card
-        title="AI Copilots — Voice System"
-        footer={
-          <div style={{ fontSize: 12, color: "#9aa1af" }}>
-            Click to generate dynamic speech from Orion or Lyric.
-          </div>
-        }
-      >
-        <div style={{ display: "flex", gap: 12 }}>
-          <button
-            onClick={() => handleVoice("orion")}
-            disabled={voiceBusy !== null}
-            style={{
-              padding: "10px 14px",
-              background: voiceBusy === "orion" ? "#374151" : "#2563eb",
-              border: "1px solid #1d4ed8",
-              borderRadius: 10,
-              color: "white",
-              fontWeight: 600,
-              cursor: "pointer",
-            }}
-          >
-            {voiceBusy === "orion" ? "Synthesizing…" : "Play Orion"}
-          </button>
-
-          <button
-            onClick={() => handleVoice("lyric")}
-            disabled={voiceBusy !== null}
-            style={{
-              padding: "10px 14px",
-              background: voiceBusy === "lyric" ? "#374151" : "#10b981",
-              border: "1px solid #059669",
-              borderRadius: 10,
-              color: "white",
-              fontWeight: 600,
-              cursor: "pointer",
-            }}
-          >
-            {voiceBusy === "lyric" ? "Synthesizing…" : "Play Lyric"}
-          </button>
-        </div>
-      </Card>
-    </main>
-  );
+  return null;
 }

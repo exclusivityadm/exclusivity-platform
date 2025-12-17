@@ -3,7 +3,8 @@ from fastapi.responses import JSONResponse
 import requests
 import os
 
-router = APIRouter(prefix="/blockchain", tags=["Blockchain"])
+# ❌ NO prefix here — mounted in main.py
+router = APIRouter(tags=["blockchain"])
 
 # Default configuration
 BASE_EXPLORER = "https://mainnet.base.org"
