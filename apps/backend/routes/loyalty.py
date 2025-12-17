@@ -1,152 +1,103 @@
-from __future__ import annotations
+from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
 
-from decimal import Decimal
-from typing import Any, Dict, List, Optional
-
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
-
-from .repositories.loyalty_repository import (
-    LoyaltyRepository,
-    create_supabase_client_from_env,
+from apps.backend.services.core_service import CoreError
+from apps.backend.services.loyalty_service import (
+    upsert_customer,
+    append_ledger,
+    get_balance_and_tier,
+    set_tiers,
+    list_tiers,
+    health_loyalty,
 )
-from .services.loyalty.loyalty_service import LoyaltyService
+
+router = APIRouter(tags=["Loyalty"])
 
 
-router = APIRouter(prefix="/loyalty", tags=["loyalty"])
+@router.get("/health")
+async def loyalty_health():
+    res = health_loyalty()
+    return JSONResponse(content=res, status_code=200 if res.get("ok") else 503)
 
 
-# -----------------------------
-# Dependency wiring
-# -----------------------------
-def get_loyalty_repo() -> LoyaltyRepository:
-    sb = create_supabase_client_from_env()
-    return LoyaltyRepository(sb)
+@router.post("/customer/upsert")
+async def loyalty_customer_upsert(request: Request):
+    try:
+        body = await request.json()
+        email = body.get("email")
+        name = body.get("name")
+        if not email:
+            return JSONResponse(status_code=400, content={"error": "email is required"})
+        return upsert_customer(request, email=email, name=name)
+    except CoreError as e:
+        return JSONResponse(status_code=e.status_code, content={"error": e.message})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 
-def get_loyalty_service(
-    repo: LoyaltyRepository = Depends(get_loyalty_repo),
-) -> LoyaltyService:
-    return LoyaltyService(repo)
+@router.post("/ledger/earn")
+async def loyalty_earn(request: Request):
+    try:
+        body = await request.json()
+        email = body.get("customer_email")
+        points = body.get("points")
+        reason = body.get("reason")
+        ref = body.get("ref")
+        if not email or not points:
+            return JSONResponse(status_code=400, content={"error": "customer_email and points are required"})
+        return append_ledger(request, customer_email=email, event_type="earn", points=int(points), reason=reason, ref=ref)
+    except CoreError as e:
+        return JSONResponse(status_code=e.status_code, content={"error": e.message})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 
-# -----------------------------
-# Schemas
-# -----------------------------
-class PolicyUpsertRequest(BaseModel):
-    policy: Dict[str, Any] = Field(default_factory=dict)
+@router.post("/ledger/redeem")
+async def loyalty_redeem(request: Request):
+    try:
+        body = await request.json()
+        email = body.get("customer_email")
+        points = body.get("points")
+        reason = body.get("reason")
+        ref = body.get("ref")
+        if not email or not points:
+            return JSONResponse(status_code=400, content={"error": "customer_email and points are required"})
+        return append_ledger(request, customer_email=email, event_type="redeem", points=int(points), reason=reason, ref=ref)
+    except CoreError as e:
+        return JSONResponse(status_code=e.status_code, content={"error": e.message})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 
-class PolicyResponse(BaseModel):
-    policy: Dict[str, Any]
+@router.get("/balance")
+async def loyalty_balance(request: Request, customer_email: str):
+    try:
+        return get_balance_and_tier(request, customer_email=customer_email)
+    except CoreError as e:
+        return JSONResponse(status_code=e.status_code, content={"error": e.message})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 
-class MemberStatusResponse(BaseModel):
-    status: Dict[str, Any]
+@router.post("/tiers/set")
+async def loyalty_tiers_set(request: Request):
+    try:
+        body = await request.json()
+        tiers = body.get("tiers")
+        if not isinstance(tiers, list):
+            return JSONResponse(status_code=400, content={"error": "tiers must be a list"})
+        return set_tiers(request, tiers=tiers)
+    except CoreError as e:
+        return JSONResponse(status_code=e.status_code, content={"error": e.message})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 
-class OrderLineIn(BaseModel):
-    line_id: str
-    product_id: Optional[str] = None
-    title: str = "Item"
-    unit_price: Decimal = Decimal("0.00")
-    quantity: int = 1
-    eligible_for_points: bool = True
-
-
-class AwardOrderRequest(BaseModel):
-    merchant_id: str
-    order_id: str
-    member_ref: str
-    currency: str = "USD"
-    discounts_total: Decimal = Decimal("0.00")
-    lines: List[OrderLineIn] = Field(default_factory=list)
-    lifetime_spend_increment: Optional[Decimal] = None
-
-
-class RefundAdjustRequest(BaseModel):
-    merchant_id: str
-    order_id: str
-    refund_id: str
-    member_ref: str
-    refund_line_amounts: Dict[str, Decimal] = Field(default_factory=dict)
-    decrement_lifetime_spend: bool = False
-
-
-# -----------------------------
-# Routes
-# -----------------------------
-@router.get("/policy/{merchant_id}", response_model=PolicyResponse)
-async def get_policy(
-    merchant_id: str,
-    svc: LoyaltyService = Depends(get_loyalty_service),
-) -> PolicyResponse:
-    policy = await svc.get_policy(merchant_id)
-    return PolicyResponse(policy=policy.to_dict())
-
-
-@router.put("/policy/{merchant_id}", response_model=PolicyResponse)
-async def put_policy(
-    merchant_id: str,
-    payload: PolicyUpsertRequest,
-    svc: LoyaltyService = Depends(get_loyalty_service),
-) -> PolicyResponse:
-    policy = await svc.upsert_policy(merchant_id, payload.policy)
-    return PolicyResponse(policy=policy.to_dict())
-
-
-@router.get(
-    "/member/{merchant_id}/{member_ref}/status",
-    response_model=MemberStatusResponse,
-)
-async def member_status(
-    merchant_id: str,
-    member_ref: str,
-    svc: LoyaltyService = Depends(get_loyalty_service),
-) -> MemberStatusResponse:
-    status = await svc.get_member_status(merchant_id, member_ref)
-    return MemberStatusResponse(status=status.to_dict())
-
-
-@router.post("/order/award")
-async def award_order(
-    payload: AwardOrderRequest,
-    svc: LoyaltyService = Depends(get_loyalty_service),
-) -> Dict[str, Any]:
-    if not payload.lines:
-        raise HTTPException(status_code=400, detail="Order must include at least one line")
-
-    return await svc.award_for_order(
-        merchant_id=payload.merchant_id,
-        order_id=payload.order_id,
-        member_ref=payload.member_ref,
-        lines=[x.model_dump() for x in payload.lines],
-        discounts_total=payload.discounts_total,
-        currency=payload.currency,
-        lifetime_spend_increment=payload.lifetime_spend_increment,
-        event_id_prefix="earn",
-        idempotency_prefix="idem:earn",
-    )
-
-
-@router.post("/order/refund")
-async def refund_adjust(
-    payload: RefundAdjustRequest,
-    svc: LoyaltyService = Depends(get_loyalty_service),
-) -> Dict[str, Any]:
-    if not payload.refund_line_amounts:
-        raise HTTPException(
-            status_code=400,
-            detail="refund_line_amounts cannot be empty",
-        )
-
-    return await svc.adjust_for_refund(
-        merchant_id=payload.merchant_id,
-        order_id=payload.order_id,
-        refund_id=payload.refund_id,
-        member_ref=payload.member_ref,
-        refund_line_amounts=payload.refund_line_amounts,
-        decrement_lifetime_spend=payload.decrement_lifetime_spend,
-        event_id_prefix="refund",
-        idempotency_prefix="idem:refund",
-    )
+@router.get("/tiers")
+async def loyalty_tiers_list(request: Request):
+    try:
+        return list_tiers(request)
+    except CoreError as e:
+        return JSONResponse(status_code=e.status_code, content={"error": e.message})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})

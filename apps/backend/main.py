@@ -43,6 +43,38 @@ def _mount(module_path: str):
         log.info(f"[ROUTER] Mounted {module_path}")
     except Exception as e:
         log.info(f"[ROUTER] Skip {module_path} ({e})")
+        return False
+
+# ----------------------------------------------------------
+# ROOT ENDPOINT
+# ----------------------------------------------------------
+@app.get("/")
+def root():
+    return {
+        "status": "running",
+        "routes_hint": [
+            "/health",
+            "/debug/routes",
+            "/core/*",
+            "/voice/*",
+            "/ai/*",
+            "/merchant/*",
+            "/loyalty/*",
+            "/shopify/*",
+        ],
+    }
+
+# ----------------------------------------------------------
+# ROUTES
+# ----------------------------------------------------------
+include_router_if_exists("apps.backend.routes.core", prefix="/core", tags=["core"])
+
+include_router_if_exists("apps.backend.routes.supabase", prefix="/supabase", tags=["supabase"])
+include_router_if_exists("apps.backend.routes.blockchain", prefix="/blockchain", tags=["blockchain"])
+include_router_if_exists("apps.backend.routes.voice", prefix="/voice", tags=["voice"])
+
+if enabled("FEATURE_AI_BRAND_BRAIN", "true"):
+    include_router_if_exists("apps.backend.routes.ai", prefix="/ai", tags=["ai"])
 
 # ---- ROUTES (CANONICAL) ----
 _mount("apps.backend.routes.voice")
