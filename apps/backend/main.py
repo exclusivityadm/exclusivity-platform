@@ -2,8 +2,6 @@
 
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.interval import IntervalTrigger
 import os
 import importlib
 import logging
@@ -13,9 +11,6 @@ from apps.backend.services.admin.logger import log_request_response
 
 log = logging.getLogger("uvicorn")
 
-# ----------------------------------------------------------
-# APP
-# ----------------------------------------------------------
 app = FastAPI(title="Exclusivity API", version="1.0.0")
 
 # ----------------------------------------------------------
@@ -46,27 +41,16 @@ async def admin_logger_middleware(request: Request, call_next):
     return response
 
 # ----------------------------------------------------------
-# HEALTH CHECK
+# HEALTH
 # ----------------------------------------------------------
 @app.get("/health")
 def health():
     return {"ok": True}
 
-# ----------------------------------------------------------
-# FEATURE FLAGS
-# ----------------------------------------------------------
 def enabled(name: str, default: str = "true") -> bool:
     return (os.getenv(name, default) or "").lower() == "true"
 
-# ----------------------------------------------------------
-# ROUTER LOADER
-# ----------------------------------------------------------
-def include_router_if_exists(
-    module_path: str,
-    attr: str = "router",
-    prefix: str | None = None,
-    tags: list[str] | None = None
-):
+def include_router_if_exists(module_path: str, attr: str = "router", prefix: str | None = None, tags: list[str] | None = None):
     try:
         module = importlib.import_module(module_path)
         router = getattr(module, attr)
@@ -77,9 +61,6 @@ def include_router_if_exists(
         log.info(f"[ROUTER] Skip {module_path} ({e})")
         return False
 
-# ----------------------------------------------------------
-# ROOT
-# ----------------------------------------------------------
 @app.get("/")
 def root():
     return {"status": "running"}
@@ -88,6 +69,8 @@ def root():
 # ROUTES
 # ----------------------------------------------------------
 include_router_if_exists("apps.backend.routes.admin", prefix="/admin", tags=["admin"])
+include_router_if_exists("apps.backend.routes.monetize", prefix="", tags=["monetize"])
+
 include_router_if_exists("apps.backend.routes.supabase", prefix="/supabase", tags=["supabase"])
 include_router_if_exists("apps.backend.routes.blockchain", prefix="/blockchain", tags=["blockchain"])
 include_router_if_exists("apps.backend.routes.voice", prefix="/voice", tags=["voice"])
@@ -102,19 +85,10 @@ if enabled("FEATURE_LOYALTY", "true"):
 if enabled("FEATURE_SHOPIFY_EMBED", "true"):
     include_router_if_exists("apps.backend.routes.shopify", prefix="/shopify", tags=["shopify"])
 
-# ----------------------------------------------------------
-# DEBUG ROUTES
-# ----------------------------------------------------------
 @app.get("/debug/routes")
 def debug_routes():
-    return [
-        {"path": r.path, "name": r.name, "methods": list(r.methods or [])}
-        for r in app.router.routes
-    ]
+    return [{"path": r.path, "name": r.name, "methods": list(r.methods or [])} for r in app.router.routes]
 
-# ----------------------------------------------------------
-# MAIN
-# ----------------------------------------------------------
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
