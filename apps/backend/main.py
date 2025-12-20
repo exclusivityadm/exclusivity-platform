@@ -47,10 +47,21 @@ async def admin_logger_middleware(request: Request, call_next):
 def health():
     return {"ok": True}
 
+# ----------------------------------------------------------
+# FEATURE FLAGS
+# ----------------------------------------------------------
 def enabled(name: str, default: str = "true") -> bool:
     return (os.getenv(name, default) or "").lower() == "true"
 
-def include_router_if_exists(module_path: str, attr: str = "router", prefix: str | None = None, tags: list[str] | None = None):
+# ----------------------------------------------------------
+# ROUTER LOADER
+# ----------------------------------------------------------
+def include_router_if_exists(
+    module_path: str,
+    attr: str = "router",
+    prefix: str | None = None,
+    tags: list[str] | None = None,
+):
     try:
         module = importlib.import_module(module_path)
         router = getattr(module, attr)
@@ -61,34 +72,56 @@ def include_router_if_exists(module_path: str, attr: str = "router", prefix: str
         log.info(f"[ROUTER] Skip {module_path} ({e})")
         return False
 
+# ----------------------------------------------------------
+# ROOT
+# ----------------------------------------------------------
 @app.get("/")
 def root():
     return {"status": "running"}
 
 # ----------------------------------------------------------
-# ROUTES
+# ROUTES — CANONICAL ORDER
 # ----------------------------------------------------------
+
+# Admin + Monetization
 include_router_if_exists("apps.backend.routes.admin", prefix="/admin", tags=["admin"])
 include_router_if_exists("apps.backend.routes.monetize", prefix="", tags=["monetize"])
 
+# Core services
 include_router_if_exists("apps.backend.routes.supabase", prefix="/supabase", tags=["supabase"])
 include_router_if_exists("apps.backend.routes.blockchain", prefix="/blockchain", tags=["blockchain"])
 include_router_if_exists("apps.backend.routes.voice", prefix="/voice", tags=["voice"])
 
+# Brand + Pricing Intelligence (NEW — install-time automation)
+include_router_if_exists("apps.backend.routes.brand", prefix="/brand", tags=["brand"])
+include_router_if_exists("apps.backend.routes.pricing", prefix="/pricing", tags=["pricing"])
+
+# AI
 if enabled("FEATURE_AI_BRAND_BRAIN", "true"):
     include_router_if_exists("apps.backend.routes.ai", prefix="/ai", tags=["ai"])
 
+# Loyalty + Merchant
 if enabled("FEATURE_LOYALTY", "true"):
     include_router_if_exists("apps.backend.routes.loyalty", prefix="/loyalty", tags=["loyalty"])
     include_router_if_exists("apps.backend.routes.merchant", prefix="/merchant", tags=["merchant"])
 
+# Shopify
 if enabled("FEATURE_SHOPIFY_EMBED", "true"):
     include_router_if_exists("apps.backend.routes.shopify", prefix="/shopify", tags=["shopify"])
 
+# ----------------------------------------------------------
+# DEBUG
+# ----------------------------------------------------------
 @app.get("/debug/routes")
 def debug_routes():
-    return [{"path": r.path, "name": r.name, "methods": list(r.methods or [])} for r in app.router.routes]
+    return [
+        {"path": r.path, "name": r.name, "methods": list(r.methods or [])}
+        for r in app.router.routes
+    ]
 
+# ----------------------------------------------------------
+# MAIN
+# ----------------------------------------------------------
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
