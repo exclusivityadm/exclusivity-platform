@@ -1,29 +1,34 @@
-from typing import Any, Dict
-from apps.backend.services.monetize.repository import (
-    get_active_plan_key_for_merchant,
-    get_plan,
-    get_entitlements,
-)
+from __future__ import annotations
 
-def resolve_merchant_entitlements(merchant_id: str) -> Dict[str, Any]:
-    plan_key = get_active_plan_key_for_merchant(merchant_id)
-    plan = get_plan(plan_key)
-    ent = get_entitlements(plan_key)
+from typing import Dict, Any
+from apps.backend.db import get_supabase
 
-    return {
-        "merchant_id": merchant_id,
-        "plan": plan,
-        "entitlements": ent,
-    }
 
-def has_entitlement(merchant_id: str, entitlement_key: str, default: bool = True) -> bool:
+def get_plan_for_merchant(merchant_id: str) -> str:
     """
-    Graceful gating:
-    - If entitlement not defined, returns default (fails open by default).
-    - If defined, respects enabled flag.
+    Source of truth:
+    - If monetize module is already assigning plans, this reads it.
+    - Otherwise defaults to 'preview'.
     """
-    data = resolve_merchant_entitlements(merchant_id)
-    ent = data.get("entitlements") or {}
-    if entitlement_key not in ent:
-        return bool(default)
-    return bool(ent[entitlement_key].get("enabled", default))
+    sb = get_supabase()
+    if not sb:
+        return "preview"
+
+    # If you already have a monetize table, keep it.
+    # If not, this safely defaults.
+    try:
+        r = sb.table("merchant_plans").select("plan").eq("merchant_id", merchant_id).limit(1).execute()
+        if r.data and (r.data[0] or {}).get("plan"):
+            return str(r.data[0]["plan"])
+    except Exception:
+        return "preview"
+
+    return "preview"
+
+
+def can_execute_actions(plan: str) -> bool:
+    """
+    Preview = suggest only.
+    Paid tiers = execute.
+    """
+    return plan.lower().strip() not in ["preview", "free"]
