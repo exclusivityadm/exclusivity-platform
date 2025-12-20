@@ -4,23 +4,28 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks
 from fastapi.responses import JSONResponse
 
 from apps.backend.db import get_supabase
-from apps.backend.services.shopify_catalog_snapshot import snapshot_catalog
-from apps.backend.services.pricing_buffer import generate_pricing_recommendations
 
-
-router = APIRouter(prefix="/pricing", tags=["pricing"])
+router = APIRouter(tags=["pricing"])
 
 
 @router.post("/catalog/snapshot")
 async def catalog_snapshot(merchant_id: str, background: BackgroundTasks):
-    background.add_task(snapshot_catalog, merchant_id)
-    return {"ok": True, "merchant_id": merchant_id, "message": "Catalog snapshot queued."}
+    try:
+        from apps.backend.services.shopify_catalog_snapshot import snapshot_catalog  # type: ignore
+        background.add_task(snapshot_catalog, merchant_id)
+        return {"ok": True, "merchant_id": merchant_id, "message": "Catalog snapshot queued."}
+    except Exception as e:
+        raise HTTPException(500, f"Catalog snapshot service not available: {e}")
 
 
 @router.post("/recommendations/generate")
 async def pricing_generate(merchant_id: str, background: BackgroundTasks):
-    background.add_task(generate_pricing_recommendations, merchant_id)
-    return {"ok": True, "merchant_id": merchant_id, "message": "Pricing recommendations queued."}
+    try:
+        from apps.backend.services.pricing_buffer import generate_pricing_recommendations  # type: ignore
+        background.add_task(generate_pricing_recommendations, merchant_id)
+        return {"ok": True, "merchant_id": merchant_id, "message": "Pricing recommendations queued."}
+    except Exception as e:
+        raise HTTPException(500, f"Pricing service not available: {e}")
 
 
 @router.get("/recommendations/latest")
@@ -29,12 +34,14 @@ async def pricing_latest(merchant_id: str):
     if not sb:
         raise HTTPException(500, "Supabase not configured")
 
-    r = sb.table("merchant_pricing_recommendations")\
-        .select("*")\
-        .eq("merchant_id", merchant_id)\
-        .order("captured_at", desc=True)\
-        .limit(1)\
+    r = (
+        sb.table("merchant_pricing_recommendations")
+        .select("*")
+        .eq("merchant_id", merchant_id)
+        .order("captured_at", desc=True)
+        .limit(1)
         .execute()
+    )
 
     if not r.data:
         return JSONResponse(content={"ok": True, "merchant_id": merchant_id, "exists": False})
