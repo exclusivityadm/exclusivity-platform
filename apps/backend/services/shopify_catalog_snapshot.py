@@ -12,17 +12,20 @@ def _utcnow() -> str:
 
 
 def snapshot_catalog(merchant_id: str) -> Dict[str, Any]:
-    """
-    Best-effort catalog snapshot. Some dev stores/scopes may limit product access.
-    We degrade gracefully and still store whatever we can.
-    """
     sb = get_supabase()
     if not sb:
         return {"ok": False, "error": "Supabase not configured"}
 
-    integ = sb.table("merchant_integrations").select("*").eq("merchant_id", merchant_id).eq("provider", "shopify").limit(1).execute()
+    integ = (
+        sb.table("merchant_integrations")
+        .select("*")
+        .eq("merchant_id", merchant_id)
+        .eq("provider", "shopify")
+        .limit(1)
+        .execute()
+    )
     if not integ.data:
-        return {"ok": False, "error": "No Shopify integration found"}
+        return {"ok": False, "error": "No Shopify integration found for merchant_id"}
 
     integration = integ.data[0]
     shop_domain = integration["shop_domain"]
@@ -36,19 +39,16 @@ def snapshot_catalog(merchant_id: str) -> Dict[str, Any]:
         payload, _h = client.get("/products.json", params={"limit": 50})
         products = payload.get("products") or []
     except Exception as e:
-        # Store snapshot even if empty so pricing engine can still run with defaults.
         error = str(e)
 
-    record = {
+    sb.table("merchant_catalog_snapshots").insert({
         "merchant_id": merchant_id,
         "shop_domain": shop_domain,
-        "captured_at": _utcnow(),
         "payload": {
             "products_count": len(products),
             "products": products,
             "error": error,
         },
-    }
-    sb.table("merchant_catalog_snapshots").insert(record).execute()
+    }).execute()
 
     return {"ok": True, "merchant_id": merchant_id, "shop_domain": shop_domain, "products_count": len(products), "error": error}
