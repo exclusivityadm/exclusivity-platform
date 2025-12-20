@@ -1,67 +1,125 @@
+# apps/backend/services/shopify_client.py
+
 from __future__ import annotations
 
-import os
-import time
 import requests
-from typing import Any, Dict, Optional, Tuple
-
-
-SHOPIFY_API_VERSION = os.getenv("SHOPIFY_API_VERSION", "2024-01")
+from typing import Dict, Any, Optional
+import time
 
 
 class ShopifyClient:
     """
-    Minimal Shopify Admin REST client with:
-    - explicit shop domain
-    - access token auth
-    - basic retry for 429 rate limits
+    Canonical Shopify REST client for Exclusivity.
+
+    Design goals:
+    - Simple, explicit REST usage (no magic SDKs)
+    - Safe defaults
+    - Deterministic behavior
+    - Centralized rate-limit handling
+    - Shopify-version pinned
     """
 
+    API_VERSION = "2024-04"
+    TIMEOUT_SECONDS = 20
+    MAX_RETRIES = 3
+    RETRY_BACKOFF_SECONDS = 1.5
+
     def __init__(self, shop_domain: str, access_token: str):
-        self.shop_domain = shop_domain.strip()
+        if not shop_domain or not access_token:
+            raise ValueError("ShopifyClient requires shop_domain and access_token")
+
+        self.shop_domain = shop_domain.lower().strip()
         self.access_token = access_token.strip()
+        self.base_url = f"https://{self.shop_domain}/admin/api/{self.API_VERSION}"
 
-    def _base(self) -> str:
-        return f"https://{self.shop_domain}/admin/api/{SHOPIFY_API_VERSION}"
-
-    def _headers(self) -> Dict[str, str]:
-        return {
+        self.headers = {
             "X-Shopify-Access-Token": self.access_token,
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
 
-    def get(self, path: str, params: Optional[Dict[str, Any]] = None, timeout: int = 20) -> Tuple[Dict[str, Any], Dict[str, str]]:
-        url = self._base() + path
-        for attempt in range(1, 5):
-            r = requests.get(url, headers=self._headers(), params=params or {}, timeout=timeout)
-            if r.status_code == 429:
-                # naive retry, Shopify rate limit
-                time.sleep(0.5 * attempt)
-                continue
-            r.raise_for_status()
-            return (r.json() if r.text else {}, dict(r.headers))
-        r.raise_for_status()
-        return ({}, dict(r.headers))
+    # ---------------------------------------------------------
+    # Low-level request handler
+    # ---------------------------------------------------------
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: Optional[Dict[str, Any]] = None,
+        json: Optional[Dict[str, Any]] = None,
+    ) -> tuple[Dict[str, Any], Dict[str, str]]:
+        """
+        Performs a REST request with retry + rate-limit awareness.
+        Returns (json_payload, response_headers).
+        """
+        url = f"{self.base_url}{path}"
 
-    @staticmethod
-    def parse_next_page_info(link_header: Optional[str]) -> Optional[str]:
-        """
-        Shopify uses cursor pagination with Link header. We store page_info as opaque cursor.
-        Example: <https://shop/admin/api/2024-01/orders.json?limit=50&page_info=xxxxx>; rel="next"
-        """
-        if not link_header:
-            return None
-        parts = [p.strip() for p in link_header.split(",")]
-        for p in parts:
-            if 'rel="next"' in p:
-                # extract page_info
-                start = p.find("page_info=")
-                if start == -1:
-                    return None
-                tail = p[start + len("page_info="):]
-                end = tail.find(">")  # cursor ends before '>'
-                cursor = tail[:end] if end != -1 else tail
-                cursor = cursor.replace("&", "").strip()
-                return cursor
-        return None
+        last_error: Optional[Exception] = None
+
+        for attempt in range(1, self.MAX_RETRIES + 1):
+            try:
+                response = requests.request(
+                    method=method,
+                    url=url,
+                    headers=self.headers,
+                    params=params,
+                    json=json,
+                    timeout=self.TIMEOUT_SECONDS,
+                )
+
+                # Shopify rate-limit handling (REST)
+                if response.status_code == 429:
+                    retry_after = response.headers.get("Retry-After")
+                    sleep_for = float(retry_after) if retry_after else self.RETRY_BACKOFF_SECONDS
+                    time.sleep(sleep_for)
+                    continue
+
+                response.raise_for_status()
+
+                if response.content:
+                    return response.json(), dict(response.headers)
+
+                return {}, dict(response.headers)
+
+            except Exception as e:
+                last_error = e
+                if attempt < self.MAX_RETRIES:
+                    time.sleep(self.RETRY_BACKOFF_SECONDS * attempt)
+                    continue
+                break
+
+        raise RuntimeError(f"Shopify API request failed after retries: {last_error}")
+
+    # ---------------------------------------------------------
+    # Public REST helpers
+    # ---------------------------------------------------------
+    def get(
+        self,
+        path: str,
+        *,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> tuple[Dict[str, Any], Dict[str, str]]:
+        return self._request("GET", path, params=params)
+
+    def post(
+        self,
+        path: str,
+        *,
+        json: Optional[Dict[str, Any]] = None,
+    ) -> tuple[Dict[str, Any], Dict[str, str]]:
+        return self._request("POST", path, json=json)
+
+    def put(
+        self,
+        path: str,
+        *,
+        json: Optional[Dict[str, Any]] = None,
+    ) -> tuple[Dict[str, Any], Dict[str, str]]:
+        return self._request("PUT", path, json=json)
+
+    def delete(
+        self,
+        path: str,
+    ) -> tuple[Dict[str, Any], Dict[str, str]]:
+        return self._request("DELETE", path)
