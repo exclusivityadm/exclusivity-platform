@@ -19,23 +19,18 @@ def _int_env(name: str, default: int) -> int:
 
 
 def generate_pricing_recommendations(merchant_id: str) -> Dict[str, Any]:
-    """
-    v1: Flat buffer recommendation.
-    This implements your economic model safely:
-    - AI will *explain* and *suggest* in Preview tier
-    - Paid tiers can later auto-apply (separate feature gate)
-    """
     sb = get_supabase()
     if not sb:
         return {"ok": False, "error": "Supabase not configured"}
 
-    # Latest catalog snapshot (if any)
-    snap = sb.table("merchant_catalog_snapshots")\
-        .select("*")\
-        .eq("merchant_id", merchant_id)\
-        .order("captured_at", desc=True)\
-        .limit(1)\
+    snap = (
+        sb.table("merchant_catalog_snapshots")
+        .select("*")
+        .eq("merchant_id", merchant_id)
+        .order("captured_at", desc=True)
+        .limit(1)
         .execute()
+    )
 
     products: List[Dict[str, Any]] = []
     shop_domain: Optional[str] = None
@@ -48,36 +43,27 @@ def generate_pricing_recommendations(merchant_id: str) -> Dict[str, Any]:
         products = payload.get("products") or []
         snapshot_error = payload.get("error")
 
-    # Flat buffer cents: intentionally "well above" expected settlement costs
-    # You can tune this later; keep it high enough to cover variability.
-    buffer_cents = _int_env("EXCL_FLAT_BUFFER_CENTS", 75)  # default $0.75 per item
+    buffer_cents = _int_env("EXCL_FLAT_BUFFER_CENTS", 75)  # $0.75 per item default
 
-    # Build per-variant suggestions (best-effort)
     recommendations = []
     for p in products:
         title = p.get("title")
         for v in (p.get("variants") or []):
-            sku = v.get("sku")
-            price = v.get("price")
-            variant_id = v.get("id")
             recommendations.append({
                 "product_title": title,
-                "variant_id": str(variant_id) if variant_id is not None else None,
-                "sku": sku,
-                "current_price": price,
+                "variant_id": str(v.get("id")) if v.get("id") is not None else None,
+                "sku": v.get("sku"),
+                "current_price": v.get("price"),
                 "suggested_additional_cents": buffer_cents,
                 "explanation": "Adds a small operational buffer per item to cover loyalty + infrastructure costs invisibly.",
             })
 
-    # Store result
-    shop_domain = shop_domain or ""
     sb.table("merchant_pricing_recommendations").insert({
         "merchant_id": merchant_id,
-        "shop_domain": shop_domain,
-        "captured_at": _utcnow(),
+        "shop_domain": shop_domain or "",
         "strategy": "flat_buffer",
         "buffer_cents": buffer_cents,
-        "notes": "v1 flat buffer. AI will present this as pricing optimization (no crypto language).",
+        "notes": "v1 flat buffer. Present as pricing optimization (no crypto language).",
         "payload": {
             "snapshot_error": snapshot_error,
             "recommendations": recommendations,
