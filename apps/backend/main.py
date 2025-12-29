@@ -1,99 +1,98 @@
-# apps/backend/main.py
-
-from fastapi import FastAPI, Request, Response
-from fastapi.middleware.cors import CORSMiddleware
-import os
-import importlib
+# app/main.py
 import logging
-import time
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
-from apps.backend.services.admin.logger import log_request_response
+from app.middleware.errors import install_error_handlers
+from app.middleware.internal_gate import InternalOnlyGate
 
-log = logging.getLogger("uvicorn")
+from app.routers.health import router as health_router
+from app.routers.version import router as version_router
+from app.routers.onboarding import router as onboarding_router
+from app.routers.shopify import router as shopify_router
+from app.routers.loyalty import router as loyalty_router
+from app.routers.settings import router as settings_router
+from app.routers.ai import router as ai_router
 
-app = FastAPI(title="Exclusivity API", version="1.0.0")
+from app.utils.settings import settings
 
-# ----------------------------------------------------------
-# CORS
-# ----------------------------------------------------------
-origins_env = os.getenv("CORS_ALLOW_ORIGINS", "").strip()
-allow_origins = [o.strip() for o in origins_env.split(",") if o.strip()]
-allow_origin_regex = None if allow_origins else r"^https://.*\.vercel\.app$|^http://localhost:3000$"
+log = logging.getLogger("exclusivity.main")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=allow_origins,
-    allow_origin_regex=allow_origin_regex,
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["*"],
-    expose_headers=["*"],
+app = FastAPI(
+    title="Exclusivity Platform",
+    version=settings.EXCLUSIVITY_VERSION,
+    description="Merchant loyalty, identity, and rewards platform",
 )
 
-# ----------------------------------------------------------
-# ADMIN LOGGING MIDDLEWARE
-# ----------------------------------------------------------
-@app.middleware("http")
-async def admin_logger_middleware(request: Request, call_next):
-    start = time.time()
-    response: Response = await call_next(request)
-    await log_request_response(request, response, start)
-    return response
+# -------------------------------------------------------------------
+# Error handling (stable envelopes, no stack leaks)
+# -------------------------------------------------------------------
+install_error_handlers(app)
 
-# ----------------------------------------------------------
-# HEALTH
-# ----------------------------------------------------------
-@app.get("/health")
-def health():
-    return {"ok": True}
-
-def enabled(name: str, default: str = "true") -> bool:
-    return (os.getenv(name, default) or "").lower() == "true"
-
-def include_router_if_exists(module_path: str, attr: str = "router", prefix: str | None = None, tags: list[str] | None = None):
-    try:
-        module = importlib.import_module(module_path)
-        router = getattr(module, attr)
-        app.include_router(router, prefix=prefix or "", tags=tags or [])
-        log.info(f"[ROUTER] Mounted {module_path}")
-        return True
-    except Exception as e:
-        log.info(f"[ROUTER] Skip {module_path} ({e})")
-        return False
-
-@app.get("/")
-def root():
-    return {"status": "running"}
-
-# ----------------------------------------------------------
-# ROUTES
-# ----------------------------------------------------------
-include_router_if_exists("apps.backend.routes.admin", prefix="/admin", tags=["admin"])
-include_router_if_exists("apps.backend.routes.monetize", prefix="", tags=["monetize"])
-
-include_router_if_exists("apps.backend.routes.supabase", prefix="/supabase", tags=["supabase"])
-include_router_if_exists("apps.backend.routes.blockchain", prefix="/blockchain", tags=["blockchain"])
-include_router_if_exists("apps.backend.routes.voice", prefix="/voice", tags=["voice"])
-
-if enabled("FEATURE_AI_BRAND_BRAIN", "true"):
-    include_router_if_exists("apps.backend.routes.ai", prefix="/ai", tags=["ai"])
-
-if enabled("FEATURE_LOYALTY", "true"):
-    include_router_if_exists("apps.backend.routes.loyalty", prefix="/loyalty", tags=["loyalty"])
-    include_router_if_exists("apps.backend.routes.merchant", prefix="/merchant", tags=["merchant"])
-
-if enabled("FEATURE_SHOPIFY_EMBED", "true"):
-    include_router_if_exists("apps.backend.routes.shopify", prefix="/shopify", tags=["shopify"])
-
-@app.get("/debug/routes")
-def debug_routes():
-    return [{"path": r.path, "name": r.name, "methods": list(r.methods or [])} for r in app.router.routes]
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(
-        "apps.backend.main:app",
-        host="0.0.0.0",
-        port=int(os.getenv("PORT", "10000")),
-        reload=True,
+# -------------------------------------------------------------------
+# CORS (merchant-facing, controlled)
+# -------------------------------------------------------------------
+if settings.CORS_MODE == "allowlist":
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.CORS_ALLOW_ORIGINS,
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "PUT", "PATCH", "OPTIONS"],
+        allow_headers=["*"],
     )
+
+# -------------------------------------------------------------------
+# Internal / Partner access gate
+# (Shopify + admin + internal tools)
+# -------------------------------------------------------------------
+app.add_middleware(
+    InternalOnlyGate,
+    internal_token=settings.INTERNAL_TOKEN,
+    allowed_sources=settings.ALLOWED_SOURCES,
+    exempt_prefixes=(
+        "/health",
+        "/version",
+        "/shopify",
+        "/onboarding",
+    ),
+)
+
+# -------------------------------------------------------------------
+# Routers
+# -------------------------------------------------------------------
+app.include_router(health_router)
+app.include_router(version_router)
+
+app.include_router(onboarding_router)
+app.include_router(shopify_router)
+
+app.include_router(loyalty_router)
+app.include_router(settings_router)
+app.include_router(ai_router)
+
+# -------------------------------------------------------------------
+# Root
+# -------------------------------------------------------------------
+@app.get("/")
+async def root():
+    return {
+        "status": "Exclusivity Online",
+        "mode": "production",
+        "product": "merchant-loyalty",
+        "routes": [
+            "/health",
+            "/version",
+            "/onboarding",
+            "/shopify",
+            "/loyalty",
+            "/settings",
+            "/ai",
+        ],
+    }
+
+# -------------------------------------------------------------------
+# Startup (no background jobs, no keepalive)
+# -------------------------------------------------------------------
+@app.on_event("startup")
+async def startup_event():
+    log.info("Exclusivity starting — clean runtime, no background schedulers")
