@@ -7,14 +7,9 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 log = logging.getLogger("keepalive")
 
-# --------------------------------------------------------
-# Supabase REST Keepalive (REAL ACTIVITY)
-# --------------------------------------------------------
-
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
-# Optional non-Supabase keepalives (Render / Vercel)
 OPTIONAL_URLS = [
     os.getenv("KEEPALIVE_RENDER_URL"),
     os.getenv("KEEPALIVE_VERCEL_URL"),
@@ -25,15 +20,16 @@ OPTIONAL_URLS = [
 
 async def supabase_rest_ping():
     """
-    Performs a real Supabase REST query that counts as activity.
-    This is the ONLY backend keepalive Supabase reliably recognizes.
+    REAL Supabase activity.
+    Executes an actual PostgREST query that Supabase counts.
     """
 
     if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
-        log.warning("[KEEPALIVE] Supabase env vars missing — skipping Supabase ping")
+        log.warning("[KEEPALIVE] Supabase env vars missing")
         return
 
-    url = f"{SUPABASE_URL}/rest/v1/"
+    # Use a real table + SELECT (read-only, minimal cost)
+    url = f"{SUPABASE_URL}/rest/v1/customer_wallets?select=id&limit=1"
 
     headers = {
         "apikey": SUPABASE_SERVICE_ROLE_KEY,
@@ -42,21 +38,18 @@ async def supabase_rest_ping():
 
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            # Lightweight REST call — no table dependency
             res = await client.get(url, headers=headers)
             if res.status_code < 400:
-                log.info("[KEEPALIVE] Supabase REST ping OK")
+                log.info("[KEEPALIVE] Supabase DB keepalive OK")
             else:
-                log.warning(f"[KEEPALIVE] Supabase REST ping failed ({res.status_code})")
+                log.warning(
+                    f"[KEEPALIVE] Supabase DB keepalive failed ({res.status_code})"
+                )
     except Exception as e:
-        log.error(f"[KEEPALIVE] Supabase REST error: {e}")
+        log.error(f"[KEEPALIVE] Supabase DB keepalive error: {e}")
 
 
 async def optional_http_pings():
-    """
-    Keeps Render / Vercel warm.
-    NOT counted by Supabase — secondary only.
-    """
     urls = [u for u in OPTIONAL_URLS if u]
     if not urls:
         return
@@ -69,16 +62,15 @@ async def optional_http_pings():
                 pass
 
 
-def start_keepalive_tasks(scheduler: AsyncIOScheduler, interval_seconds: int = 300):
-    """
-    Starts real Supabase keepalive + optional platform pings.
-    """
-
+def start_keepalive_tasks(
+    scheduler: AsyncIOScheduler,
+    interval_seconds: int = 300,
+):
     scheduler.add_job(
         supabase_rest_ping,
         "interval",
         seconds=interval_seconds,
-        id="supabase_rest_keepalive",
+        id="supabase_db_keepalive",
         replace_existing=True,
     )
 
@@ -91,6 +83,6 @@ def start_keepalive_tasks(scheduler: AsyncIOScheduler, interval_seconds: int = 3
     )
 
     log.info(
-        f"[KEEPALIVE] Scheduler started — interval {interval_seconds}s "
-        "(Supabase REST + optional HTTP)"
+        f"[KEEPALIVE] Started — interval {interval_seconds}s "
+        "(Supabase DB + optional HTTP)"
     )
