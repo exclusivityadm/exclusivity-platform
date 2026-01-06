@@ -1,182 +1,142 @@
-from __future__ import annotations
-
 import os
-import hmac
-import hashlib
-from typing import Dict, Any, Optional
-
+import time
 import requests
-from fastapi import APIRouter, HTTPException, Request, BackgroundTasks
-from fastapi.responses import JSONResponse
+from typing import Any, Dict, Optional
+from urllib.parse import urlencode
 
-from apps.backend.db import get_supabase
-from apps.backend.services.merchant_identity import (
-    get_or_create_merchant_identity_for_shop,
-    upsert_integration,
-)
+from fastapi import APIRouter, HTTPException, Request
 
-router = APIRouter(tags=["shopify"])
+from apps.backend.routes.services.supabase_admin import insert_one, upsert_one, select_one, update_where, new_uuid
 
-SHOPIFY_API_KEY = os.getenv("SHOPIFY_API_KEY")
-SHOPIFY_API_SECRET = os.getenv("SHOPIFY_API_SECRET")
+router = APIRouter(prefix="/shopify", tags=["shopify"])
 
+SHOPIFY_API_VERSION = os.getenv("SHOPIFY_API_VERSION", "2024-10")
+BACKEND_PUBLIC_URL = os.getenv("BACKEND_PUBLIC_URL", "").rstrip("/")
+SHOPIFY_CLIENT_ID = os.getenv("SHOPIFY_CLIENT_ID", "")
+SHOPIFY_CLIENT_SECRET = os.getenv("SHOPIFY_CLIENT_SECRET", "")
+ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")
 
-def _verify_hmac(query: Dict[str, str]) -> bool:
-    if not SHOPIFY_API_SECRET:
-        return False
-    received = query.get("hmac", "")
-    items = []
-    for k in sorted(query.keys()):
-        if k == "hmac":
-            continue
-        items.append(f"{k}={query[k]}")
-    msg = "&".join(items).encode("utf-8")
-    digest = hmac.new(SHOPIFY_API_SECRET.encode("utf-8"), msg, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(digest, received)
+def _required_env() -> None:
+    missing = []
+    for k, v in {
+        "BACKEND_PUBLIC_URL": BACKEND_PUBLIC_URL,
+        "SHOPIFY_CLIENT_ID": SHOPIFY_CLIENT_ID,
+        "SHOPIFY_CLIENT_SECRET": SHOPIFY_CLIENT_SECRET,
+    }.items():
+        if not v:
+            missing.append(k)
+    if missing:
+        raise HTTPException(status_code=500, detail=f"Missing env: {','.join(missing)}")
 
+def _shopify_rest(shop_domain: str, access_token: str, path: str) -> str:
+    return f"https://{shop_domain}/admin/api/{SHOPIFY_API_VERSION}/{path.lstrip('/')}"
 
-def _best_effort_background(background: BackgroundTasks, fn, *args, **kwargs):
+def _register_webhook(shop_domain: str, access_token: str, topic: str, address: str) -> Optional[int]:
     """
-    Adds background task if fn exists; never raises.
+    Best-effort webhook registration. Returns webhook id if created.
     """
-    try:
-        if fn:
-            background.add_task(fn, *args, **kwargs)
-    except Exception:
-        return
+    url = _shopify_rest(shop_domain, access_token, "/webhooks.json")
+    headers = {
+        "X-Shopify-Access-Token": access_token,
+        "Content-Type": "application/json",
+    }
+    payload = {"webhook": {"topic": topic, "address": address, "format": "json"}}
+    r = requests.post(url, headers=headers, json=payload, timeout=30)
+    if r.status_code in (200, 201):
+        return int(r.json()["webhook"]["id"])
+    # If already exists or Shopify rejects due to duplicates, we do not fail install.
+    return None
 
+def _exchange_code_for_token(shop_domain: str, code: str) -> str:
+    url = f"https://{shop_domain}/admin/oauth/access_token"
+    payload = {
+        "client_id": SHOPIFY_CLIENT_ID,
+        "client_secret": SHOPIFY_CLIENT_SECRET,
+        "code": code,
+    }
+    r = requests.post(url, json=payload, timeout=30)
+    if r.status_code != 200:
+        raise HTTPException(status_code=400, detail=f"oauth_exchange_failed: {r.text}")
+    return r.json()["access_token"]
 
 @router.get("/oauth/callback")
-async def oauth_callback(request: Request, background: BackgroundTasks):
+async def shopify_oauth_callback(request: Request):
     """
-    Canonical install entrypoint:
-    - Verify Shopify HMAC
-    - Exchange code for access token
-    - Resolve/create canonical merchant UUID
-    - Upsert integration mapping
-    - Ensure baseline merchant_brand row exists
-    - Kick backfill + brand ingest + catalog snapshot + pricing recs (best-effort)
+    Canonical: OAuth success = merchant UUID creation + webhook registration + backfill enqueue.
+    No onboarding. No UI gating beyond engine_state.
     """
-    if not SHOPIFY_API_KEY or not SHOPIFY_API_SECRET:
-        raise HTTPException(500, "Shopify OAuth not configured (missing SHOPIFY_API_KEY/SHOPIFY_API_SECRET)")
+    _required_env()
 
     q = dict(request.query_params)
-    if not _verify_hmac(q):
-        raise HTTPException(400, "Invalid OAuth signature")
+    shop_domain = (q.get("shop") or "").strip().lower()
+    code = (q.get("code") or "").strip()
 
-    code = q.get("code")
-    shop = q.get("shop")
-    scope = q.get("scope", "")
+    if not shop_domain or not code:
+        raise HTTPException(status_code=400, detail="missing_shop_or_code")
 
-    if not code or not shop:
-        raise HTTPException(400, "Missing required OAuth params: code/shop")
+    access_token = _exchange_code_for_token(shop_domain, code)
 
-    shop_domain = shop.lower().strip()
+    # Create or retrieve merchant by shop_domain (Exclusivity UUID is canonical)
+    merchant = select_one("merchants", {"shop_domain": shop_domain})
+    if not merchant:
+        merchant_id = new_uuid()
+        merchant = insert_one("merchants", {
+            "id": merchant_id,
+            "shop_domain": shop_domain,
+            "engine_state": "hydrating",
+            "shopify_access_token": access_token,
+            "points_per_dollar": 1.0,
+        })
+    else:
+        # Reinstall/refresh token: lock engine back to hydrating until backfill completes again (safe)
+        update_where("merchants", {"id": merchant["id"]}, {
+            "engine_state": "hydrating",
+            "shopify_access_token": access_token,
+        })
 
-    # Exchange code for token
-    token_url = f"https://{shop_domain}/admin/oauth/access_token"
-    payload = {"client_id": SHOPIFY_API_KEY, "client_secret": SHOPIFY_API_SECRET, "code": code}
+    # Register webhooks (mandatory engine continuity)
+    webhook_address = f"{BACKEND_PUBLIC_URL}/shopify/webhook"
+    wid_paid = _register_webhook(shop_domain, access_token, "orders/paid", webhook_address)
+    wid_refunded = _register_webhook(shop_domain, access_token, "orders/refunded", webhook_address)
 
+    # Persist webhook ids (best-effort metadata)
     try:
-        r = requests.post(token_url, json=payload, timeout=20)
-        r.raise_for_status()
-        data = r.json()
-        access_token = data.get("access_token")
-        scopes = data.get("scope", scope)
-        if not access_token:
-            raise Exception("Missing access_token in response")
-    except Exception as e:
-        raise HTTPException(500, f"OAuth token exchange failed: {e}")
-
-    # Resolve/create canonical merchant UUID
-    ident = get_or_create_merchant_identity_for_shop(shop_domain, provider="shopify")
-    merchant_id = ident.merchant_id
-
-    # Upsert integration mapping
-    up = upsert_integration(
-        merchant_id=merchant_id,
-        provider="shopify",
-        shop_domain=shop_domain,
-        access_token=access_token,
-        scopes=scopes or "",
-    )
-    if not up.get("ok"):
-        raise HTTPException(500, f"Integration upsert failed: {up.get('error')}")
-
-    # Ensure baseline merchant_brand exists
-    sb = get_supabase()
-    if not sb:
-        raise HTTPException(500, "Supabase not configured")
-
-    try:
-        br = sb.table("merchant_brand").select("*").eq("merchant_id", merchant_id).limit(1).execute()
-        if not br.data:
-            sb.table("merchant_brand").insert({
-                "merchant_id": merchant_id,
-                "shop_domain": shop_domain,
-                "program_name": "Loyalty Program",
-                "unit_name_singular": "Point",
-                "unit_name_plural": "Points",
-                "onboarding_completed": False,
-            }).execute()
-        else:
-            sb.table("merchant_brand").update({"shop_domain": shop_domain}).eq("merchant_id", merchant_id).execute()
+        upsert_one("shopify_webhook_registry", {
+            "merchant_id": merchant["id"],
+            "shop_domain": shop_domain,
+            "orders_paid_webhook_id": wid_paid,
+            "orders_refunded_webhook_id": wid_refunded,
+            "updated_at": time.time(),
+        }, conflict_cols="merchant_id")
     except Exception:
-        # non-fatal; install can still proceed
+        # Table may not exist yet; we remain engine-correct without it.
         pass
 
-    # --- BEST-EFFORT: Kick install automation tasks ---
-    # Backfill (if module exists)
-    enqueue_backfill = None
-    run_backfill_once = None
+    # Enqueue backfill job immediately (mandatory first action after install)
     try:
-        from apps.backend.services.shopify_backfill import enqueue_backfill as _eb, run_backfill_once as _rb  # type: ignore
-        enqueue_backfill, run_backfill_once = _eb, _rb
+        insert_one("shopify_backfill_jobs", {
+            "merchant_id": merchant["id"],
+            "shop_domain": shop_domain,
+            "status": "queued",
+        })
     except Exception:
-        pass
+        upsert_one("shopify_backfill_jobs", {
+            "merchant_id": merchant["id"],
+            "shop_domain": shop_domain,
+            "status": "queued",
+            "run_after": None,
+            "error_last": None,
+        }, conflict_cols="merchant_id")
 
-    try:
-        if enqueue_backfill:
-            enqueue_backfill(merchant_id, shop_domain)  # type: ignore
-    except Exception:
-        pass
-
-    _best_effort_background(background, run_backfill_once, merchant_id)
-
-    # Brand ingest
-    ingest_brand = None
-    try:
-        from apps.backend.services.shopify_brand_ingest import ingest_brand as _ingest  # type: ignore
-        ingest_brand = _ingest
-    except Exception:
-        pass
-    _best_effort_background(background, ingest_brand, merchant_id)
-
-    # Catalog snapshot
-    snapshot_catalog = None
-    try:
-        from apps.backend.services.shopify_catalog_snapshot import snapshot_catalog as _snap  # type: ignore
-        snapshot_catalog = _snap
-    except Exception:
-        pass
-    _best_effort_background(background, snapshot_catalog, merchant_id)
-
-    # Pricing recommendations
-    gen_recs = None
-    try:
-        from apps.backend.services.pricing_buffer import generate_pricing_recommendations as _gen  # type: ignore
-        gen_recs = _gen
-    except Exception:
-        pass
-    _best_effort_background(background, gen_recs, merchant_id)
-
-    return JSONResponse(content={
+    # Return a simple acknowledgement (frontend can poll engine_state if needed later)
+    return {
         "ok": True,
-        "merchant_id": merchant_id,
+        "merchant_id": merchant["id"],
         "shop_domain": shop_domain,
-        "message": "Installed. Canonical merchant identity locked. Automation queued.",
-        "next": {
-            "brand_status": f"/brand/status?merchant_id={merchant_id}",
-            "pricing_latest": f"/pricing/recommendations/latest?merchant_id={merchant_id}",
-        }
-    })
+        "engine_state": "hydrating",
+        "webhooks": {
+            "orders_paid": bool(wid_paid),
+            "orders_refunded": bool(wid_refunded),
+        },
+        "backfill": "queued",
+    }
