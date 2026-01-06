@@ -1,26 +1,48 @@
-# FULL FILE — new
-import os, hmac, hashlib, base64, requests
+import os
+import base64
+import hmac
+import hashlib
+from fastapi import APIRouter, Request, Header, HTTPException
 
-def verify_webhook(raw: bytes, sig: str | None) -> bool:
-    secret = os.getenv("SHOPIFY_WEBHOOK_SECRET", "")
-    digest = base64.b64encode(hmac.new(secret.encode(), raw, hashlib.sha256).digest()).decode()
-    return hmac.compare_digest(digest, sig or "")
+from apps.backend.routes.services.supabase_admin import select_one
+from apps.backend.routes.services.shopify_incremental_service import process_order_paid
 
-def register_webhook(shop: str, token: str, topic: str, callback_path: str):
-    url = f"https://{shop}/admin/api/2024-10/webhooks.json"
-    base = os.getenv("BACKEND_PUBLIC_URL", "").rstrip("/")
-    address = f"{base}{callback_path}"
-    payload = {"webhook": {"topic": topic, "address": address, "format": "json"}}
-    r = requests.post(url, json=payload, headers={"X-Shopify-Access-Token": token}, timeout=15)
-    r.raise_for_status()
+router = APIRouter(prefix="/shopify", tags=["shopify"])
 
-def map_order_to_points(order: dict) -> int:
-    try:
-        subtotal = float(order.get("subtotal_price", 0) or 0)
-        return int(round(subtotal))
-    except Exception:
-        return 0
+SHOPIFY_WEBHOOK_SECRET = os.getenv("SHOPIFY_WEBHOOK_SECRET", "")
 
-def extract_customer_id(order: dict) -> str:
-    cust = order.get("customer") or {}
-    return str(cust.get("id") or order.get("email") or "unknown")
+def _verify(raw: bytes, hmac_header: str) -> bool:
+    digest = hmac.new(
+        SHOPIFY_WEBHOOK_SECRET.encode(),
+        raw,
+        hashlib.sha256,
+    ).digest()
+    return hmac.compare_digest(
+        base64.b64encode(digest).decode(),
+        hmac_header or "",
+    )
+
+@router.post("/webhook")
+async def shopify_webhook(
+    request: Request,
+    x_shopify_hmac_sha256: str = Header(default=""),
+    x_shopify_topic: str = Header(default=""),
+    x_shopify_shop_domain: str = Header(default=""),
+):
+    raw = await request.body()
+    if not _verify(raw, x_shopify_hmac_sha256):
+        raise HTTPException(status_code=401, detail="invalid_signature")
+
+    merchant = select_one("merchants", {"shop_domain": x_shopify_shop_domain})
+    if not merchant or merchant.get("engine_state") != "ready":
+        return {"ok": True, "ignored": True}
+
+    if x_shopify_topic.lower() == "orders/paid":
+        payload = await request.json()
+        return process_order_paid(
+            merchant_id=merchant["id"],
+            points_per_dollar=float(merchant.get("points_per_dollar", 1.0)),
+            order=payload,
+        )
+
+    return {"ok": True}
