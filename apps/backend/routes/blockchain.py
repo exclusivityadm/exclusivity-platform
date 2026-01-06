@@ -1,37 +1,19 @@
-from fastapi import APIRouter
-from fastapi.responses import JSONResponse
-import requests
 import os
+from fastapi import APIRouter, Header, HTTPException
 
-# ❌ NO prefix here — mounted in main.py
-router = APIRouter(tags=["blockchain"])
+from apps.backend.routes.services.blockchain_orchestrator_service import process_one_mint_job
 
-# Default configuration
-BASE_EXPLORER = "https://mainnet.base.org"
-BASE_RPC = "https://mainnet.base.org/api"
-CHAIN_ID_DECIMAL = 8453
-CHAIN_ID_HEX = hex(CHAIN_ID_DECIMAL)
+router = APIRouter(prefix="/blockchain", tags=["blockchain"])
 
+WORKER_TOKEN = os.getenv("WORKER_TOKEN", "")
 
 @router.get("/status")
 async def blockchain_status():
-    """Basic blockchain connectivity and network status check."""
-    try:
-        # Optionally test API connectivity
-        response = requests.get(BASE_EXPLORER, timeout=5)
-        ok = response.status_code == 200
+    # Abstracted status for internal monitoring
+    return {"ok": True, "mode": os.getenv("BLOCKCHAIN_MODE", "internal")}
 
-        return JSONResponse(
-            content={
-                "connected": ok,
-                "network": "Base Mainnet",
-                "chain_id_decimal": CHAIN_ID_DECIMAL,
-                "chain_id_hex": CHAIN_ID_HEX,
-                "explorer": BASE_EXPLORER,
-            }
-        )
-    except Exception as e:
-        return JSONResponse(
-            status_code=500,
-            content={"connected": False, "error": str(e)},
-        )
+@router.post("/worker/tick")
+async def blockchain_worker_tick(x_worker_token: str = Header(...)):
+    if not WORKER_TOKEN or x_worker_token != WORKER_TOKEN:
+        raise HTTPException(status_code=401, detail="unauthorized")
+    return process_one_mint_job()
