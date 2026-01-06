@@ -20,6 +20,8 @@ def _headers() -> Dict[str, str]:
     }
 
 def _rest_url(table: str) -> str:
+    if not SUPABASE_URL:
+        raise SupabaseAdminError("Missing SUPABASE_URL")
     return f"{SUPABASE_URL}/rest/v1/{table}"
 
 def new_uuid() -> str:
@@ -65,6 +67,27 @@ def select_one(table: str, filters: Dict[str, str], columns: str = "*") -> Optio
         raise SupabaseAdminError(f"Select failed ({table}): {r.status_code} {r.text}")
     data = r.json()
     return data[0] if data else None
+
+def select_many(
+    table: str,
+    filters: Optional[Dict[str, str]] = None,
+    columns: str = "*",
+    order: Optional[str] = None,
+    limit: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    params: Dict[str, str] = {"select": columns}
+    if filters:
+        for k, v in filters.items():
+            params[k] = f"eq.{v}"
+    if order:
+        params["order"] = order
+    if limit is not None:
+        params["limit"] = str(limit)
+
+    r = requests.get(_rest_url(table), headers=_headers(), params=params, timeout=30)
+    if r.status_code != 200:
+        raise SupabaseAdminError(f"Select many failed ({table}): {r.status_code} {r.text}")
+    return r.json()
 
 def update_where(table: str, filters: Dict[str, str], patch: Dict[str, Any]) -> None:
     params = {k: f"eq.{v}" for k, v in filters.items()}
