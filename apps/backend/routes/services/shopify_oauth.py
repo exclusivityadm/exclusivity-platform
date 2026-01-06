@@ -1,76 +1,115 @@
 import os
-import hmac
-import hashlib
-import secrets
-import urllib.parse
 import requests
-from typing import Dict, Optional
+from typing import Optional
 
-SHOPIFY_API_KEY = os.getenv("SHOPIFY_API_KEY", "")
-SHOPIFY_API_SECRET = os.getenv("SHOPIFY_API_SECRET", "")
-SHOPIFY_SCOPES = os.getenv("SHOPIFY_SCOPES", "read_orders,read_customers")
-SHOPIFY_REDIRECT_URI = os.getenv("SHOPIFY_REDIRECT_URI", "")  # e.g. https://<render-backend>/shopify/callback
+from fastapi import APIRouter, HTTPException, Request
 
-class ShopifyOAuthError(Exception):
-    pass
+from apps.backend.routes.services.supabase_admin import insert_one, upsert_one, select_one, update_where, new_uuid
 
-def _require_env():
-    if not SHOPIFY_API_KEY or not SHOPIFY_API_SECRET or not SHOPIFY_REDIRECT_URI:
-        raise ShopifyOAuthError(
-            "Missing Shopify env. Require SHOPIFY_API_KEY, SHOPIFY_API_SECRET, SHOPIFY_REDIRECT_URI."
-        )
+router = APIRouter(prefix="/shopify", tags=["shopify"])
 
-def build_install_url(shop: str, state: str) -> str:
-    _require_env()
-    base = f"https://{shop}/admin/oauth/authorize"
-    params = {
-        "client_id": SHOPIFY_API_KEY,
-        "scope": SHOPIFY_SCOPES,
-        "redirect_uri": SHOPIFY_REDIRECT_URI,
-        "state": state,
-    }
-    return base + "?" + urllib.parse.urlencode(params)
+SHOPIFY_API_VERSION = os.getenv("SHOPIFY_API_VERSION", "2024-10")
+BACKEND_PUBLIC_URL = os.getenv("BACKEND_PUBLIC_URL", "").rstrip("/")
+SHOPIFY_CLIENT_ID = os.getenv("SHOPIFY_CLIENT_ID", "")
+SHOPIFY_CLIENT_SECRET = os.getenv("SHOPIFY_CLIENT_SECRET", "")
 
-def verify_hmac(query_params: Dict[str, str]) -> bool:
-    """
-    Verify Shopify HMAC on callback query string.
-    """
-    _require_env()
-    received_hmac = query_params.get("hmac", "")
-    if not received_hmac:
-        return False
+def _required_env() -> None:
+    missing = []
+    for k, v in {
+        "BACKEND_PUBLIC_URL": BACKEND_PUBLIC_URL,
+        "SHOPIFY_CLIENT_ID": SHOPIFY_CLIENT_ID,
+        "SHOPIFY_CLIENT_SECRET": SHOPIFY_CLIENT_SECRET,
+    }.items():
+        if not v:
+            missing.append(k)
+    if missing:
+        raise HTTPException(status_code=500, detail=f"Missing env: {','.join(missing)}")
 
-    message_pairs = []
-    for k in sorted(query_params.keys()):
-        if k in ("hmac", "signature"):
-            continue
-        message_pairs.append(f"{k}={query_params[k]}")
-    message = "&".join(message_pairs)
+def _shopify_rest(shop_domain: str, access_token: str, path: str) -> str:
+    return f"https://{shop_domain}/admin/api/{SHOPIFY_API_VERSION}/{path.lstrip('/')}"
 
-    digest = hmac.new(
-        SHOPIFY_API_SECRET.encode("utf-8"),
-        message.encode("utf-8"),
-        hashlib.sha256
-    ).hexdigest()
-
-    return hmac.compare_digest(digest, received_hmac)
-
-def exchange_code_for_token(shop: str, code: str) -> str:
-    _require_env()
-    url = f"https://{shop}/admin/oauth/access_token"
+def _exchange_code_for_token(shop_domain: str, code: str) -> str:
+    url = f"https://{shop_domain}/admin/oauth/access_token"
     payload = {
-        "client_id": SHOPIFY_API_KEY,
-        "client_secret": SHOPIFY_API_SECRET,
+        "client_id": SHOPIFY_CLIENT_ID,
+        "client_secret": SHOPIFY_CLIENT_SECRET,
         "code": code,
     }
     r = requests.post(url, json=payload, timeout=30)
     if r.status_code != 200:
-        raise ShopifyOAuthError(f"Token exchange failed: {r.status_code} {r.text}")
-    data = r.json()
-    token = data.get("access_token")
-    if not token:
-        raise ShopifyOAuthError("Token exchange succeeded but access_token missing.")
-    return token
+        raise HTTPException(status_code=400, detail=f"oauth_exchange_failed: {r.text}")
+    return r.json()["access_token"]
 
-def new_state() -> str:
-    return secrets.token_urlsafe(24)
+def _register_webhook(shop_domain: str, access_token: str, topic: str, address: str) -> Optional[int]:
+    url = _shopify_rest(shop_domain, access_token, "/webhooks.json")
+    headers = {
+        "X-Shopify-Access-Token": access_token,
+        "Content-Type": "application/json",
+    }
+    payload = {"webhook": {"topic": topic, "address": address, "format": "json"}}
+    r = requests.post(url, headers=headers, json=payload, timeout=30)
+    if r.status_code in (200, 201):
+        return int(r.json()["webhook"]["id"])
+    return None
+
+@router.get("/oauth/callback")
+async def shopify_oauth_callback(request: Request):
+    _required_env()
+    q = dict(request.query_params)
+    shop_domain = (q.get("shop") or "").strip().lower()
+    code = (q.get("code") or "").strip()
+    if not shop_domain or not code:
+        raise HTTPException(status_code=400, detail="missing_shop_or_code")
+
+    access_token = _exchange_code_for_token(shop_domain, code)
+
+    merchant = select_one("merchants", {"shop_domain": shop_domain})
+    if not merchant:
+        merchant_id = new_uuid()
+        merchant = insert_one("merchants", {
+            "id": merchant_id,
+            "shop_domain": shop_domain,
+            "engine_state": "hydrating",
+            "is_active": True,
+            "shopify_access_token": access_token,
+            "points_per_dollar": 1.0,
+        })
+    else:
+        update_where("merchants", {"id": merchant["id"]}, {
+            "engine_state": "hydrating",
+            "is_active": True,
+            "shopify_access_token": access_token,
+        })
+
+    webhook_address = f"{BACKEND_PUBLIC_URL}/shopify/webhook"
+    created = {
+        "orders_paid": bool(_register_webhook(shop_domain, access_token, "orders/paid", webhook_address)),
+        "orders_refunded": bool(_register_webhook(shop_domain, access_token, "orders/refunded", webhook_address)),
+        "orders_cancelled": bool(_register_webhook(shop_domain, access_token, "orders/cancelled", webhook_address)),
+        "app_uninstalled": bool(_register_webhook(shop_domain, access_token, "app/uninstalled", webhook_address)),
+    }
+
+    # Enqueue backfill (mandatory)
+    try:
+        insert_one("shopify_backfill_jobs", {
+            "merchant_id": merchant["id"],
+            "shop_domain": shop_domain,
+            "status": "queued",
+        })
+    except Exception:
+        upsert_one("shopify_backfill_jobs", {
+            "merchant_id": merchant["id"],
+            "shop_domain": shop_domain,
+            "status": "queued",
+            "run_after": None,
+            "error_last": None,
+        }, conflict_cols="merchant_id")
+
+    return {
+        "ok": True,
+        "merchant_id": merchant["id"],
+        "shop_domain": shop_domain,
+        "engine_state": "hydrating",
+        "webhooks_registered": created,
+        "backfill": "queued",
+    }
