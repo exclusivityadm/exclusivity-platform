@@ -2,6 +2,7 @@ import os
 import base64
 import hmac
 import hashlib
+from datetime import datetime, timezone
 from typing import Any, Dict
 
 from fastapi import APIRouter, Request, Header, HTTPException
@@ -24,6 +25,9 @@ def _verify(raw: bytes, hmac_header: str) -> bool:
     computed = base64.b64encode(digest).decode("utf-8")
     return hmac.compare_digest(computed, hmac_header or "")
 
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
 @router.post("/webhook")
 async def shopify_webhook(
     request: Request,
@@ -45,17 +49,17 @@ async def shopify_webhook(
     if merchant.get("is_active") is False:
         return {"ok": True, "ignored": True, "reason": "merchant_inactive"}
 
-    # App uninstall should be processed even if engine not ready
+    # Uninstall processed even if engine not ready
     if topic == "app/uninstalled":
         update_where("merchants", {"id": merchant["id"]}, {
             "is_active": False,
-            "uninstalled_at": "now()",
-            "engine_state": "hydrating",  # prevents accidental action
+            "uninstalled_at": _now_iso(),
+            "engine_state": "hydrating",
             "shopify_access_token": None,
         })
         return {"ok": True, "event": "app/uninstalled", "merchant_id": merchant["id"]}
 
-    # For all financial mutations, require engine ready
+    # Financial mutations require engine ready
     if merchant.get("engine_state") != "ready":
         return {"ok": True, "ignored": True, "reason": "engine_not_ready"}
 
