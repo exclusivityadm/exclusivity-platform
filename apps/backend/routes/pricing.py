@@ -1,59 +1,78 @@
-from __future__ import annotations
+from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, HTTPException, Query
 
-from apps.backend.db import get_supabase
+from apps.backend.routes.services.pricing_engine_service import (
+    create_catalog_snapshot,
+    generate_recommendations,
+    latest_recommendation_for_merchant,
+    recommendation_items,
+)
 
-router = APIRouter(tags=["pricing"])
+router = APIRouter(prefix="/pricing", tags=["pricing"])
 
 
 @router.post("/catalog/snapshot")
-async def catalog_snapshot(merchant_id: str, background: BackgroundTasks):
-    try:
-        from apps.backend.services.shopify_catalog_snapshot import snapshot_catalog  # type: ignore
-        background.add_task(snapshot_catalog, merchant_id)
-        return {"ok": True, "merchant_id": merchant_id, "message": "Catalog snapshot queued."}
-    except Exception as e:
-        raise HTTPException(500, f"Catalog snapshot service not available: {e}")
+async def pricing_catalog_snapshot(body: Dict[str, Any]):
+    """
+    Stores a point-in-time catalog snapshot.
+    Engine-first: snapshot can be created by Shopify ingest, brand ingest, or admin tooling.
+    """
+    merchant_id = body.get("merchant_id")
+    if not merchant_id:
+        raise HTTPException(status_code=400, detail="missing_merchant_id")
+
+    source = body.get("source") or "manual"
+    notes = body.get("notes")
+    items = body.get("items") or []
+    if not isinstance(items, list) or len(items) == 0:
+        raise HTTPException(status_code=400, detail="missing_items")
+
+    snap = create_catalog_snapshot(
+        merchant_id=str(merchant_id),
+        source=str(source),
+        notes=str(notes) if notes is not None else None,
+        items=items,
+    )
+    return {"ok": True, "snapshot": snap}
 
 
 @router.post("/recommendations/generate")
-async def pricing_generate(merchant_id: str, background: BackgroundTasks):
-    try:
-        from apps.backend.services.pricing_buffer import generate_pricing_recommendations  # type: ignore
-        background.add_task(generate_pricing_recommendations, merchant_id)
-        return {"ok": True, "merchant_id": merchant_id, "message": "Pricing recommendations queued."}
-    except Exception as e:
-        raise HTTPException(500, f"Pricing service not available: {e}")
+async def pricing_recommendations_generate(body: Dict[str, Any]):
+    """
+    Generates pricing recommendations for a snapshot.
+    """
+    merchant_id = body.get("merchant_id")
+    snapshot_id = body.get("snapshot_id")
+    if not merchant_id or not snapshot_id:
+        raise HTTPException(status_code=400, detail="missing_merchant_id_or_snapshot_id")
+
+    uplift_percent = body.get("uplift_percent")  # optional override
+    buffer_cents = body.get("buffer_cents")      # optional override
+    est_mint_cost_cents = body.get("est_mint_cost_cents")  # optional override
+
+    out = generate_recommendations(
+        merchant_id=str(merchant_id),
+        snapshot_id=str(snapshot_id),
+        uplift_percent=uplift_percent,
+        buffer_cents=buffer_cents,
+        est_mint_cost_cents=est_mint_cost_cents,
+    )
+    return {"ok": True, "recommendation": out}
 
 
 @router.get("/recommendations/latest")
-async def pricing_latest(merchant_id: str):
-    sb = get_supabase()
-    if not sb:
-        raise HTTPException(500, "Supabase not configured")
+async def pricing_recommendations_latest(merchant_id: str = Query(...)):
+    """
+    Returns latest recommendation set + items for merchant_id.
+    """
+    rec = latest_recommendation_for_merchant(str(merchant_id))
+    if not rec:
+        return {"ok": True, "recommendation": None}
 
-    r = (
-        sb.table("merchant_pricing_recommendations")
-        .select("*")
-        .eq("merchant_id", merchant_id)
-        .order("captured_at", desc=True)
-        .limit(1)
-        .execute()
-    )
-
-    if not r.data:
-        return JSONResponse(content={"ok": True, "merchant_id": merchant_id, "exists": False})
-
-    row = r.data[0]
-    return JSONResponse(content={
+    items = recommendation_items(rec["id"])
+    return {
         "ok": True,
-        "merchant_id": merchant_id,
-        "exists": True,
-        "captured_at": row.get("captured_at"),
-        "strategy": row.get("strategy"),
-        "buffer_cents": row.get("buffer_cents"),
-        "notes": row.get("notes"),
-        "payload": row.get("payload"),
-    })
+        "recommendation": rec,
+        "items": items,
+    }
