@@ -27,6 +27,32 @@ def _rest_url(table: str) -> str:
 def new_uuid() -> str:
     return str(uuid.uuid4())
 
+def rpc(function_name: str, payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Call a Postgres function via PostgREST RPC.
+    """
+    if not SUPABASE_URL:
+        raise SupabaseAdminError("Missing SUPABASE_URL in backend env.")
+    url = f"{SUPABASE_URL}/rest/v1/rpc/{function_name}"
+    h = _headers()
+    r = requests.post(url, headers=h, json=payload, timeout=30)
+    if r.status_code != 200:
+        raise SupabaseAdminError(f"Supabase RPC failed ({function_name}): {r.status_code} {r.text}")
+    return r.json()
+
+def insert_one(table: str, row: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Insert a single row via PostgREST.
+    """
+    url = _rest_url(table)
+    h = _headers()
+    h["Prefer"] = "return=representation"
+    r = requests.post(url, headers=h, json=[row], timeout=30)
+    if r.status_code not in (200, 201):
+        raise SupabaseAdminError(f"Supabase insert failed ({table}): {r.status_code} {r.text}")
+    data = r.json()
+    return data[0] if data else row
+
 def upsert_one(table: str, row: Dict[str, Any], conflict_cols: str) -> Dict[str, Any]:
     """
     Upsert a single row via PostgREST.
@@ -42,9 +68,7 @@ def upsert_one(table: str, row: Dict[str, Any], conflict_cols: str) -> Dict[str,
         raise SupabaseAdminError(f"Supabase upsert failed ({table}): {r.status_code} {r.text}")
 
     data = r.json()
-    if not data:
-        return row
-    return data[0]
+    return data[0] if data else row
 
 def select_one(table: str, filters: Dict[str, str], columns: str = "*") -> Optional[Dict[str, Any]]:
     url = _rest_url(table)
@@ -57,9 +81,33 @@ def select_one(table: str, filters: Dict[str, str], columns: str = "*") -> Optio
     if r.status_code != 200:
         raise SupabaseAdminError(f"Supabase select failed ({table}): {r.status_code} {r.text}")
     data = r.json()
-    if not data:
-        return None
-    return data[0]
+    return data[0] if data else None
+
+def select_many(
+    table: str,
+    filters: Optional[Dict[str, str]] = None,
+    columns: str = "*",
+    order: Optional[str] = None,
+    limit: Optional[int] = None
+) -> List[Dict[str, Any]]:
+    url = _rest_url(table)
+    h = _headers()
+    params: Dict[str, str] = {"select": columns}
+
+    if filters:
+        for k, v in filters.items():
+            params[k] = f"eq.{v}"
+
+    if order:
+        params["order"] = order
+
+    if limit is not None:
+        params["limit"] = str(limit)
+
+    r = requests.get(url, headers=h, params=params, timeout=30)
+    if r.status_code != 200:
+        raise SupabaseAdminError(f"Supabase select_many failed ({table}): {r.status_code} {r.text}")
+    return r.json()
 
 def update_where(table: str, filters: Dict[str, str], patch: Dict[str, Any]) -> int:
     url = _rest_url(table)
