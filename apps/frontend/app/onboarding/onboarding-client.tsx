@@ -1,39 +1,25 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import {
-  getMerchantProfileByShop,
-  getInitQuestions,
-  saveInitAnswers,
-} from "@/lib/exclusivityApi";
 import { useSearchParams } from "next/navigation";
+import { getMerchantProfileByShop } from "@/lib/exclusivityApi";
 
-/* -----------------------------
-   Canonical types
------------------------------- */
+/* ---------------------------------
+   Canonical local result types
+---------------------------------- */
 
 type MerchantProfile = {
   merchant_id: string;
   shop_domain?: string | null;
-  created_at?: string | null;
 };
 
-type ResolveSuccess = {
-  ok: true;
-  merchant_id: string;
-  created: boolean;
-};
+type ResolveResult =
+  | { ok: true; merchant_id: string }
+  | { ok: false; message: string };
 
-type ResolveFail = {
-  ok: false;
-  error: string;
-};
-
-type ResolveResult = ResolveSuccess | ResolveFail;
-
-/* -----------------------------
+/* ---------------------------------
    Component
------------------------------- */
+---------------------------------- */
 
 export default function OnboardingClient() {
   const searchParams = useSearchParams();
@@ -44,9 +30,6 @@ export default function OnboardingClient() {
   const [merchantId, setMerchantId] = useState<string | null>(null);
   const [step, setStep] = useState(1);
 
-  /* -----------------------------
-     Resolve merchant identity
-  ------------------------------ */
   useEffect(() => {
     if (!shop) {
       setError("Missing shop parameter");
@@ -55,43 +38,39 @@ export default function OnboardingClient() {
 
     let cancelled = false;
 
-    async function resolve(): Promise<ResolveResult> {
-      const profile = await getMerchantProfileByShop(shop);
+    async function resolveMerchant(): Promise<ResolveResult> {
+      const res = await getMerchantProfileByShop(shop);
 
-      if (!profile.ok) {
-        return { ok: false, error: profile.error || "Profile lookup failed" };
+      if (!res.ok) {
+        return { ok: false, message: "Profile lookup failed" };
       }
 
-      const data = profile.data as MerchantProfile | null;
+      const data = res.data as MerchantProfile | null;
 
       if (!data?.merchant_id) {
-        return { ok: false, error: "Unable to resolve merchant identity" };
+        return { ok: false, message: "Unable to resolve merchant identity" };
       }
 
-      return {
-        ok: true,
-        merchant_id: data.merchant_id,
-        created: false,
-      };
+      return { ok: true, merchant_id: data.merchant_id };
     }
 
     async function run() {
       setBusy(true);
       setError(null);
 
-      const result = await resolve();
+      const result = await resolveMerchant();
 
       if (cancelled) return;
 
       if (!result.ok) {
         setBusy(false);
-        setError(result.error);
+        setError(result.message);
         return;
       }
 
       setMerchantId(result.merchant_id);
-      setBusy(false);
       setStep(2);
+      setBusy(false);
     }
 
     run();
@@ -101,9 +80,9 @@ export default function OnboardingClient() {
     };
   }, [shop]);
 
-  /* -----------------------------
+  /* ---------------------------------
      UI
-  ------------------------------ */
+  ---------------------------------- */
 
   if (busy) {
     return <div className="p-6 text-sm text-gray-500">Initializing…</div>;
