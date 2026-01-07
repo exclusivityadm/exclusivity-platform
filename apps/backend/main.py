@@ -1,4 +1,5 @@
 # apps/backend/main.py
+
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 import os
@@ -79,7 +80,7 @@ def root():
     return {"status": "running"}
 
 # ----------------------------------------------------------
-# ROUTES — CANONICAL ORDER
+# ROUTES — CANONICAL ORDER (PREFIXES OWNED BY MAIN)
 # ----------------------------------------------------------
 
 # Admin + Monetization
@@ -91,7 +92,7 @@ include_router_if_exists("apps.backend.routes.supabase", prefix="/supabase", tag
 include_router_if_exists("apps.backend.routes.blockchain", prefix="/blockchain", tags=["blockchain"])
 include_router_if_exists("apps.backend.routes.voice", prefix="/voice", tags=["voice"])
 
-# Brand + Pricing
+# Brand + Pricing Intelligence
 include_router_if_exists("apps.backend.routes.brand", prefix="/brand", tags=["brand"])
 include_router_if_exists("apps.backend.routes.pricing", prefix="/pricing", tags=["pricing"])
 
@@ -104,15 +105,11 @@ if enabled("FEATURE_LOYALTY", "true"):
     include_router_if_exists("apps.backend.routes.loyalty", prefix="/loyalty", tags=["loyalty"])
     include_router_if_exists("apps.backend.routes.merchant", prefix="/merchant", tags=["merchant"])
 
-# Shopify (ALL Shopify routes live here)
+# Shopify (canonical: mount both routers under /shopify)
 if enabled("FEATURE_SHOPIFY_EMBED", "true"):
     include_router_if_exists("apps.backend.routes.shopify", prefix="/shopify", tags=["shopify"])
     include_router_if_exists("apps.backend.routes.shopify_oauth", prefix="/shopify", tags=["shopify"])
-    include_router_if_exists(
-        "apps.backend.routes.shopify_backfill_worker",
-        prefix="",
-        tags=["shopify-backfill-worker"],
-    )
+    include_router_if_exists("apps.backend.routes.shopify_backfill_worker", prefix="", tags=["shopify-backfill-worker"])
 
 # ----------------------------------------------------------
 # DEBUG
