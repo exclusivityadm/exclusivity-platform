@@ -1,119 +1,79 @@
 "use client";
 
-/**
- * ActionsPanel (Phase 06)
- * -----------------------
- * Wires AI action preview + execute.
- * Backend enforces plan gating (Preview tier cannot execute).
- *
- * Endpoints:
- * - POST /ai/action/preview  { merchant_id, action }
- * - POST /ai/action/execute  { merchant_id, action }
- */
+import { useState } from "react";
+import { previewAction } from "@/lib/exclusivityApi";
 
-import { useMemo, useState } from "react";
-import { previewAction, executeAction } from "@/lib/exclusivityApi";
+/* ---------------------------------
+   Local canonical result
+---------------------------------- */
 
-type ActionPreviewResult = any;
-type ActionExecuteResult = any;
+type PreviewOk = {
+  ok: true;
+  data: any;
+};
+
+type PreviewFail = {
+  ok: false;
+  message: string;
+};
+
+type PreviewResult = PreviewOk | PreviewFail;
+
+/* ---------------------------------
+   Component
+---------------------------------- */
 
 export default function ActionsPanel({ merchantId }: { merchantId: string }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [preview, setPreview] = useState<ActionPreviewResult | null>(null);
-  const [executed, setExecuted] = useState<ActionExecuteResult | null>(null);
+  const [preview, setPreview] = useState<any>(null);
 
-  const sampleAction = useMemo(
-    () => ({
-      type: "daily_briefing_send",
-      channel: "email",
-      payload: {
-        subject: "Today’s Briefing",
-        notes: "Sample action from dashboard to validate execution surface.",
-      },
-    }),
-    []
-  );
-
-  async function doPreview() {
-    setBusy(true);
-    setErr(null);
-    setExecuted(null);
-
-    const r = await previewAction(merchantId, sampleAction);
-    if (!r.ok) {
-      setBusy(false);
-      setErr(r.error || "Preview failed");
-      return;
-    }
-
-    setPreview(r.data);
-    setBusy(false);
-  }
-
-  async function doExecute() {
+  async function runPreview(action: Record<string, any>) {
     setBusy(true);
     setErr(null);
 
-    const r = await executeAction(merchantId, sampleAction);
-    if (!r.ok) {
+    const res = await previewAction(action);
+
+    const normalized: PreviewResult = res.ok
+      ? { ok: true, data: res.data }
+      : { ok: false, message: "Preview failed" };
+
+    if (normalized.ok === false) {
+      const { message } = normalized;
+      setErr(message);
       setBusy(false);
-      // Backend may return 403 with message in details
-      const msg =
-        r.details?.message ||
-        r.error ||
-        "Execute failed";
-      setErr(msg);
       return;
     }
 
-    setExecuted(r.data);
+    const { data } = normalized;
+    setPreview(data);
     setBusy(false);
   }
 
   return (
-    <section className="border rounded p-4 space-y-3">
-      <div className="font-medium">AI Actions</div>
-
-      <div className="text-xs text-gray-500">
-        Preview is always allowed. Execute is tier-gated by backend.
-      </div>
+    <div className="p-4 border rounded space-y-3">
+      <div className="font-semibold">AI Actions</div>
 
       {err && <div className="text-sm text-red-600">{err}</div>}
 
-      <div className="flex gap-2">
-        <button
-          className="border rounded px-3 py-2 text-sm"
-          onClick={doPreview}
-          disabled={busy}
-        >
-          {busy ? "Working…" : "Preview Action"}
-        </button>
+      <button
+        disabled={busy}
+        onClick={() =>
+          runPreview({
+            merchant_id: merchantId,
+            type: "daily_summary",
+          })
+        }
+        className="px-3 py-1 rounded bg-black text-white text-sm disabled:opacity-50"
+      >
+        {busy ? "Previewing…" : "Preview Action"}
+      </button>
 
-        <button
-          className="border rounded px-3 py-2 text-sm"
-          onClick={doExecute}
-          disabled={busy}
-        >
-          {busy ? "Working…" : "Execute Action"}
-        </button>
-      </div>
-
-      <div className="grid md:grid-cols-2 gap-3">
-        <div className="space-y-1">
-          <div className="text-xs text-gray-500">Preview result</div>
-          <pre className="text-xs bg-gray-50 p-3 rounded overflow-auto min-h-[120px]">
-{JSON.stringify(preview, null, 2)}
-          </pre>
-        </div>
-
-        <div className="space-y-1">
-          <div className="text-xs text-gray-500">Execute result</div>
-          <pre className="text-xs bg-gray-50 p-3 rounded overflow-auto min-h-[120px]">
-{JSON.stringify(executed, null, 2)}
-          </pre>
-        </div>
-      </div>
-    </section>
+      {preview && (
+        <pre className="text-xs bg-gray-100 p-2 rounded overflow-auto">
+          {JSON.stringify(preview, null, 2)}
+        </pre>
+      )}
+    </div>
   );
 }
