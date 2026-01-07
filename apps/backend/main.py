@@ -80,7 +80,7 @@ def root():
     return {"status": "running"}
 
 # ----------------------------------------------------------
-# ROUTES — CANONICAL ORDER (PREFIXES OWNED BY MAIN)
+# ROUTES — CANONICAL ORDER
 # ----------------------------------------------------------
 
 # Admin + Monetization
@@ -105,8 +105,10 @@ if enabled("FEATURE_LOYALTY", "true"):
     include_router_if_exists("apps.backend.routes.loyalty", prefix="/loyalty", tags=["loyalty"])
     include_router_if_exists("apps.backend.routes.merchant", prefix="/merchant", tags=["merchant"])
 
-# Actions (Dashboard control plane)
-include_router_if_exists("apps.backend.routes.actions", prefix="/actions", tags=["actions"])
+# Rewards + Notifications (Step H)
+if enabled("FEATURE_REWARDS", "true"):
+    include_router_if_exists("apps.backend.routes.rewards", prefix="/rewards", tags=["rewards"])
+    include_router_if_exists("apps.backend.routes.notifications", prefix="/notify", tags=["notify"])
 
 # Shopify (canonical: mount BOTH routers under /shopify)
 if enabled("FEATURE_SHOPIFY_EMBED", "true"):
