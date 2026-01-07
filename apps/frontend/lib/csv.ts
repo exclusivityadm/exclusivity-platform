@@ -1,21 +1,27 @@
+/**
+ * CSV download helper
+ * Canonical, TS-safe, non-iterable-based implementation
+ */
+
 export function downloadCsv(
   filename: string,
   rows: Array<Record<string, any>>
-) {
+): void {
   if (!rows || rows.length === 0) return;
 
-  const headerSet: Record<string, true> = {};
+  // Collect headers deterministically
+  const headerMap: Record<string, true> = {};
 
   for (const row of rows) {
     if (!row) continue;
     for (const key of Object.keys(row)) {
-      headerSet[key] = true;
+      headerMap[key] = true;
     }
   }
 
-  const headers = Object.keys(headerSet);
+  const headers = Object.keys(headerMap);
 
-  const escape = (value: any) => {
+  const escape = (value: any): string => {
     const s = value == null ? "" : String(value);
     if (s.includes('"') || s.includes(",") || s.includes("\n")) {
       return `"${s.replace(/"/g, '""')}"`;
@@ -44,5 +50,7 @@ export function downloadCsv(
   a.click();
   document.body.removeChild(a);
 
-  setTimeout(() => URL.revokeObjectURL(url), 500);
+  setTimeout(() => {
+    URL.revokeObjectURL(url);
+  }, 500);
 }
