@@ -32,21 +32,20 @@ export default function ActionsPanel({ merchantId }: { merchantId: string }) {
     setBusy(true);
     setErr(null);
 
-    const res = await previewAction(action);
+    // ✅ FIX: pass merchantId explicitly
+    const res = await previewAction(merchantId, action);
 
     const normalized: PreviewResult = res.ok
       ? { ok: true, data: res.data }
       : { ok: false, message: "Preview failed" };
 
-    if (normalized.ok === false) {
-      const { message } = normalized;
-      setErr(message);
+    if (!normalized.ok) {
+      setErr(normalized.message);
       setBusy(false);
       return;
     }
 
-    const { data } = normalized;
-    setPreview(data);
+    setPreview(normalized.data);
     setBusy(false);
   }
 
@@ -60,7 +59,6 @@ export default function ActionsPanel({ merchantId }: { merchantId: string }) {
         disabled={busy}
         onClick={() =>
           runPreview({
-            merchant_id: merchantId,
             type: "daily_summary",
           })
         }
