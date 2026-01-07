@@ -105,11 +105,18 @@ if enabled("FEATURE_LOYALTY", "true"):
     include_router_if_exists("apps.backend.routes.loyalty", prefix="/loyalty", tags=["loyalty"])
     include_router_if_exists("apps.backend.routes.merchant", prefix="/merchant", tags=["merchant"])
 
-# Shopify (canonical: mount both routers under /shopify)
+# Actions (STEP 22 — REQUIRED)
+include_router_if_exists("apps.backend.routes.actions", prefix="/actions", tags=["actions"])
+
+# Shopify
 if enabled("FEATURE_SHOPIFY_EMBED", "true"):
     include_router_if_exists("apps.backend.routes.shopify", prefix="/shopify", tags=["shopify"])
     include_router_if_exists("apps.backend.routes.shopify_oauth", prefix="/shopify", tags=["shopify"])
-    include_router_if_exists("apps.backend.routes.shopify_backfill_worker", prefix="", tags=["shopify-backfill-worker"])
+    include_router_if_exists(
+        "apps.backend.routes.shopify_backfill_worker",
+        prefix="",
+        tags=["shopify-backfill-worker"],
+    )
 
 # ----------------------------------------------------------
 # DEBUG
