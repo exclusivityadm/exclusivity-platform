@@ -1,7 +1,7 @@
 // apps/frontend/app/onboarding/onboarding-client.tsx
 // =====================================================
-// Exclusivity — Onboarding Client Logic
-// Client-only, dynamic-safe
+// Exclusivity — Onboarding Client
+// Canonical, TS-safe discriminated unions
 // =====================================================
 
 "use client";
@@ -13,6 +13,10 @@ import {
   getMerchantProfileByShop,
   apiPost,
 } from "@/lib/exclusivityApi";
+
+/* ================================
+   Types
+================================ */
 
 type ResolveSuccess = {
   ok: true;
@@ -26,6 +30,10 @@ type ResolveFailure = {
 };
 
 type ResolveResult = ResolveSuccess | ResolveFailure;
+
+/* ================================
+   Component
+================================ */
 
 export default function OnboardingClient() {
   const params = useSearchParams();
@@ -46,11 +54,16 @@ export default function OnboardingClient() {
 
   async function resolveMerchant(): Promise<ResolveResult> {
     const status = await getBrandStatusByShop(shop);
-    if (!status.ok) return { ok: false, error: "Brand status check failed" };
+    if (!status.ok) {
+      return { ok: false, error: "Brand status check failed" };
+    }
 
     const profile = await getMerchantProfileByShop(shop);
     if (profile.ok && profile.data?.merchant_id) {
-      return { ok: true, merchant_id: profile.data.merchant_id };
+      return {
+        ok: true,
+        merchant_id: profile.data.merchant_id,
+      };
     }
 
     const ingest = await apiPost<{ merchant_id: string }>(
@@ -62,7 +75,11 @@ export default function OnboardingClient() {
       return { ok: false, error: "Merchant bootstrap failed" };
     }
 
-    return { ok: true, merchant_id: ingest.data.merchant_id };
+    return {
+      ok: true,
+      merchant_id: ingest.data.merchant_id,
+      created: true,
+    };
   }
 
   async function handleContinue() {
@@ -71,7 +88,7 @@ export default function OnboardingClient() {
 
     const result = await resolveMerchant();
 
-    if (!result.ok) {
+    if (result.ok === false) {
       setBusy(false);
       setError(result.error);
       return;
