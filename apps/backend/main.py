@@ -16,13 +16,9 @@ app = FastAPI(title="Exclusivity API", version="1.0.0")
 # ----------------------------------------------------------
 # CORS
 # ----------------------------------------------------------
-origins_env = (os.getenv("CORS_ALLOW_ORIGINS", "") or "").strip()
+origins_env = os.getenv("CORS_ALLOW_ORIGINS", "").strip()
 allow_origins = [o.strip() for o in origins_env.split(",") if o.strip()]
-
-# If no explicit allowlist is set, allow Vercel preview/prod + local dev
-allow_origin_regex = None
-if not allow_origins:
-    allow_origin_regex = r"^https://.*\.vercel\.app$|^http://localhost:3000$|^http://127\.0\.0\.1:3000$"
+allow_origin_regex = None if allow_origins else r"^https://.*\.vercel\.app$|^http://localhost:3000$"
 
 app.add_middleware(
     CORSMiddleware,
@@ -45,7 +41,7 @@ async def admin_logger_middleware(request: Request, call_next):
     return response
 
 # ----------------------------------------------------------
-# HEALTH (simple)
+# HEALTH
 # ----------------------------------------------------------
 @app.get("/health")
 def health():
@@ -65,7 +61,7 @@ def include_router_if_exists(
     attr: str = "router",
     prefix: str | None = None,
     tags: list[str] | None = None,
-) -> bool:
+):
     try:
         module = importlib.import_module(module_path)
         router = getattr(module, attr)
@@ -87,49 +83,35 @@ def root():
 # ROUTES — CANONICAL ORDER (PREFIXES OWNED BY MAIN)
 # ----------------------------------------------------------
 
-# 1) Admin + Monetization
+# Admin + Monetization
 include_router_if_exists("apps.backend.routes.admin", prefix="/admin", tags=["admin"])
 include_router_if_exists("apps.backend.routes.monetize", prefix="", tags=["monetize"])
 
-# 2) Core infra / ops
-include_router_if_exists("apps.backend.routes.health", prefix="/health", tags=["health"])
-include_router_if_exists("apps.backend.routes.settings", prefix="/settings", tags=["settings"])
+# Core services
 include_router_if_exists("apps.backend.routes.supabase", prefix="/supabase", tags=["supabase"])
+include_router_if_exists("apps.backend.routes.blockchain", prefix="/blockchain", tags=["blockchain"])
 include_router_if_exists("apps.backend.routes.voice", prefix="/voice", tags=["voice"])
 
-# 3) Shopify (canonical: mount BOTH routers under /shopify)
-if enabled("FEATURE_SHOPIFY_EMBED", "true"):
-    include_router_if_exists("apps.backend.routes.shopify", prefix="/shopify", tags=["shopify"])
-    include_router_if_exists("apps.backend.routes.shopify_oauth", prefix="/shopify", tags=["shopify"])
-
-# 4) Brand + Pricing Intelligence (install-time)
+# Brand + Pricing Intelligence (install-time)
 include_router_if_exists("apps.backend.routes.brand", prefix="/brand", tags=["brand"])
 include_router_if_exists("apps.backend.routes.pricing", prefix="/pricing", tags=["pricing"])
 
-# 5) Merchant (FIRST, per your instruction)
-#    Keep merchant before loyalty/onboarding so identity + profile endpoints always exist early.
-if enabled("FEATURE_MERCHANT", "true"):
-    include_router_if_exists("apps.backend.routes.merchant", prefix="/merchant", tags=["merchant"])
-
-# 6) Onboarding (depends on merchant + brand + ai)
-if enabled("FEATURE_ONBOARDING", "true"):
-    include_router_if_exists("apps.backend.routes.onboarding", prefix="/onboarding", tags=["onboarding"])
-
-# 7) Actions / Dashboard orchestration (preview/execute actions)
-if enabled("FEATURE_ACTIONS", "true"):
-    include_router_if_exists("apps.backend.routes.actions", prefix="/actions", tags=["actions"])
-
-# 8) Loyalty
-if enabled("FEATURE_LOYALTY", "true"):
-    include_router_if_exists("apps.backend.routes.loyalty", prefix="/loyalty", tags=["loyalty"])
-
-# 9) Blockchain (optional / later-stage)
-if enabled("FEATURE_BLOCKCHAIN", "true"):
-    include_router_if_exists("apps.backend.routes.blockchain", prefix="/blockchain", tags=["blockchain"])
-
-# 10) AI
+# AI
 if enabled("FEATURE_AI_BRAND_BRAIN", "true"):
     include_router_if_exists("apps.backend.routes.ai", prefix="/ai", tags=["ai"])
+
+# Loyalty + Merchant
+if enabled("FEATURE_LOYALTY", "true"):
+    include_router_if_exists("apps.backend.routes.loyalty", prefix="/loyalty", tags=["loyalty"])
+    include_router_if_exists("apps.backend.routes.merchant", prefix="/merchant", tags=["merchant"])
+
+# Actions (Dashboard control plane)
+include_router_if_exists("apps.backend.routes.actions", prefix="/actions", tags=["actions"])
+
+# Shopify (canonical: mount BOTH routers under /shopify)
+if enabled("FEATURE_SHOPIFY_EMBED", "true"):
+    include_router_if_exists("apps.backend.routes.shopify", prefix="/shopify", tags=["shopify"])
+    include_router_if_exists("apps.backend.routes.shopify_oauth", prefix="/shopify", tags=["shopify"])
 
 # ----------------------------------------------------------
 # DEBUG
@@ -146,7 +128,6 @@ def debug_routes():
 # ----------------------------------------------------------
 if __name__ == "__main__":
     import uvicorn
-
     uvicorn.run(
         "apps.backend.main:app",
         host="0.0.0.0",
