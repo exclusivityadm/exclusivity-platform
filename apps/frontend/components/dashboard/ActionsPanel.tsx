@@ -1,153 +1,119 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
-import { Section } from "./Section";
-import { ActionModal } from "./ActionModal";
-import { previewAction, executeAction, ActionPayload } from "@/lib/ui04Actions";
-import { downloadCsv } from "@/lib/csv";
+/**
+ * ActionsPanel (Phase 06)
+ * -----------------------
+ * Wires AI action preview + execute.
+ * Backend enforces plan gating (Preview tier cannot execute).
+ *
+ * Endpoints:
+ * - POST /ai/action/preview  { merchant_id, action }
+ * - POST /ai/action/execute  { merchant_id, action }
+ */
 
-export function ActionsPanel(props: {
-  merchant_id: string;
-  pricing: any | null;
-  jobs: any[] | null;
-  invoice: any | null;
-}) {
-  const [open, setOpen] = useState(false);
-  const [title, setTitle] = useState("");
-  const [preview, setPreview] = useState<any | null>(null);
-  const [execResult, setExecResult] = useState<any | null>(null);
-  const [executing, setExecuting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [pendingAction, setPendingAction] = useState<ActionPayload | null>(null);
+import { useMemo, useState } from "react";
+import { previewAction, executeAction } from "@/lib/exclusivityApi";
 
-  const failedJobsCount = useMemo(() => {
-    const list = props.jobs || [];
-    return list.filter((j) => j?.status === "failed").length;
-  }, [props.jobs]);
+type ActionPreviewResult = any;
+type ActionExecuteResult = any;
 
-  async function openFor(action: ActionPayload, label: string) {
-    setError(null);
-    setExecResult(null);
-    setPreview(null);
-    setPendingAction(action);
-    setTitle(label);
-    setOpen(true);
+export default function ActionsPanel({ merchantId }: { merchantId: string }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [preview, setPreview] = useState<ActionPreviewResult | null>(null);
+  const [executed, setExecuted] = useState<ActionExecuteResult | null>(null);
 
-    const p = await previewAction(action);
+  const sampleAction = useMemo(
+    () => ({
+      type: "daily_briefing_send",
+      channel: "email",
+      payload: {
+        subject: "Today’s Briefing",
+        notes: "Sample action from dashboard to validate execution surface.",
+      },
+    }),
+    []
+  );
 
-    if (!p.ok) {
-      setError((p as { ok: false; error: string }).error);
-      return;
-    }
+  async function doPreview() {
+    setBusy(true);
+    setErr(null);
+    setExecuted(null);
 
-    setPreview(p.data);
-  }
-
-  async function onExecute() {
-    if (!pendingAction) return;
-
-    setExecuting(true);
-    setError(null);
-    setExecResult(null);
-
-    const r = await executeAction(pendingAction);
-
-    setExecuting(false);
-
+    const r = await previewAction(merchantId, sampleAction);
     if (!r.ok) {
-      setError((r as { ok: false; error: string }).error);
+      setBusy(false);
+      setErr(r.error || "Preview failed");
       return;
     }
 
-    setExecResult(r.data);
+    setPreview(r.data);
+    setBusy(false);
   }
 
-  function exportInvoiceCsv() {
-    if (!props.invoice) return;
-    downloadCsv("exclusivity-invoice-latest.csv", [props.invoice]);
+  async function doExecute() {
+    setBusy(true);
+    setErr(null);
+
+    const r = await executeAction(merchantId, sampleAction);
+    if (!r.ok) {
+      setBusy(false);
+      // Backend may return 403 with message in details
+      const msg =
+        r.details?.message ||
+        r.error ||
+        "Execute failed";
+      setErr(msg);
+      return;
+    }
+
+    setExecuted(r.data);
+    setBusy(false);
   }
 
   return (
-    <>
-      <Section title="Actions" subtitle="Approve actions before execution">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          {/* Apply Pricing */}
-          <div className="rounded-xl border border-neutral-800 bg-neutral-950/40 p-4">
-            <div className="text-sm font-medium">Apply Pricing</div>
-            <div className="mt-1 text-xs text-neutral-400">
-              Applies latest recommendation to catalog.
-            </div>
-            <button
-              className="mt-3 w-full rounded-lg bg-white px-3 py-2 text-sm text-black disabled:opacity-60"
-              disabled={!props.merchant_id || !props.pricing}
-              onClick={() =>
-                openFor(
-                  {
-                    intent: "pricing.apply_recommendation",
-                    merchant_id: props.merchant_id,
-                    params: {
-                      recommendation_id: props.pricing?.id || null,
-                    },
-                  },
-                  "Apply Pricing Recommendation"
-                )
-              }
-            >
-              Preview & Approve
-            </button>
-          </div>
+    <section className="border rounded p-4 space-y-3">
+      <div className="font-medium">AI Actions</div>
 
-          {/* Retry Failed Mints */}
-          <div className="rounded-xl border border-neutral-800 bg-neutral-950/40 p-4">
-            <div className="text-sm font-medium">Retry Failed Mints</div>
-            <div className="mt-1 text-xs text-neutral-400">
-              Retries failed blockchain jobs ({failedJobsCount} failed).
-            </div>
-            <button
-              className="mt-3 w-full rounded-lg bg-white px-3 py-2 text-sm text-black disabled:opacity-60"
-              disabled={!props.merchant_id || failedJobsCount === 0}
-              onClick={() =>
-                openFor(
-                  {
-                    intent: "blockchain.retry_failed_jobs",
-                    merchant_id: props.merchant_id,
-                    params: { limit: 25 },
-                  },
-                  "Retry Failed Blockchain Jobs"
-                )
-              }
-            >
-              Preview & Approve
-            </button>
-          </div>
+      <div className="text-xs text-gray-500">
+        Preview is always allowed. Execute is tier-gated by backend.
+      </div>
 
-          {/* Export Invoice */}
-          <div className="rounded-xl border border-neutral-800 bg-neutral-950/40 p-4">
-            <div className="text-sm font-medium">Export Invoice</div>
-            <div className="mt-1 text-xs text-neutral-400">
-              Download latest invoice snapshot as CSV.
-            </div>
-            <button
-              className="mt-3 w-full rounded-lg bg-white px-3 py-2 text-sm text-black disabled:opacity-60"
-              disabled={!props.invoice}
-              onClick={exportInvoiceCsv}
-            >
-              Download CSV
-            </button>
-          </div>
+      {err && <div className="text-sm text-red-600">{err}</div>}
+
+      <div className="flex gap-2">
+        <button
+          className="border rounded px-3 py-2 text-sm"
+          onClick={doPreview}
+          disabled={busy}
+        >
+          {busy ? "Working…" : "Preview Action"}
+        </button>
+
+        <button
+          className="border rounded px-3 py-2 text-sm"
+          onClick={doExecute}
+          disabled={busy}
+        >
+          {busy ? "Working…" : "Execute Action"}
+        </button>
+      </div>
+
+      <div className="grid md:grid-cols-2 gap-3">
+        <div className="space-y-1">
+          <div className="text-xs text-gray-500">Preview result</div>
+          <pre className="text-xs bg-gray-50 p-3 rounded overflow-auto min-h-[120px]">
+{JSON.stringify(preview, null, 2)}
+          </pre>
         </div>
-      </Section>
 
-      <ActionModal
-        open={open}
-        title={title}
-        preview={preview}
-        execResult={execResult}
-        executing={executing}
-        error={error}
-        onClose={() => setOpen(false)}
-        onExecute={onExecute}
-      />
-    </>
+        <div className="space-y-1">
+          <div className="text-xs text-gray-500">Execute result</div>
+          <pre className="text-xs bg-gray-50 p-3 rounded overflow-auto min-h-[120px]">
+{JSON.stringify(executed, null, 2)}
+          </pre>
+        </div>
+      </div>
+    </section>
   );
 }
