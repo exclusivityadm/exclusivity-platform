@@ -35,9 +35,8 @@ export function ActionsPanel(props: {
 
     const p = await previewAction(action);
 
-    // ✅ Discriminated union narrowing (canonical)
     if (!p.ok) {
-      setError(p.error);
+      setError((p as { ok: false; error: string }).error);
       return;
     }
 
@@ -55,9 +54,8 @@ export function ActionsPanel(props: {
 
     setExecuting(false);
 
-    // ✅ Discriminated union narrowing (canonical)
     if (!r.ok) {
-      setError(r.error);
+      setError((r as { ok: false; error: string }).error);
       return;
     }
 
