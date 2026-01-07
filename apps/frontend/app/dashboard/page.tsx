@@ -11,13 +11,13 @@ interface PageProps {
 export default function DashboardPage({ searchParams }: PageProps) {
   const merchantId = searchParams?.merchant_id;
 
-  // 🔒 Guardrail: merchant context required
+  // 🔒 Guardrail: dashboard requires merchant_id
   if (!merchantId) {
     redirect("/onboarding");
   }
 
   return (
-    <Suspense fallback={<div className="p-6">Loading dashboard…</div>}>
+    <Suspense fallback={<div className="p-6 text-sm text-gray-500">Loading dashboard…</div>}>
       <DashboardRoot merchantId={merchantId} />
     </Suspense>
   );
