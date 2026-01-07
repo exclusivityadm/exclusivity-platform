@@ -1,111 +1,133 @@
-// apps/frontend/app/onboarding/onboarding-client.tsx
-// =====================================================
-// Exclusivity — Onboarding Client
-// Canonical, TS-safe discriminated unions
-// =====================================================
-
 "use client";
 
-import { useState } from "react";
-import { useSearchParams, useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
 import {
-  getBrandStatusByShop,
   getMerchantProfileByShop,
-  apiPost,
+  getInitQuestions,
+  saveInitAnswers,
 } from "@/lib/exclusivityApi";
+import { useSearchParams } from "next/navigation";
 
-/* ================================
-   Types
-================================ */
+/* -----------------------------
+   Canonical types
+------------------------------ */
+
+type MerchantProfile = {
+  merchant_id: string;
+  shop_domain?: string | null;
+  created_at?: string | null;
+};
 
 type ResolveSuccess = {
   ok: true;
   merchant_id: string;
-  created?: boolean;
+  created: boolean;
 };
 
-type ResolveFailure = {
+type ResolveFail = {
   ok: false;
   error: string;
 };
 
-type ResolveResult = ResolveSuccess | ResolveFailure;
+type ResolveResult = ResolveSuccess | ResolveFail;
 
-/* ================================
+/* -----------------------------
    Component
-================================ */
+------------------------------ */
 
 export default function OnboardingClient() {
-  const params = useSearchParams();
-  const router = useRouter();
-  const shop = params.get("shop");
+  const searchParams = useSearchParams();
+  const shop = searchParams.get("shop");
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [merchantId, setMerchantId] = useState<string | null>(null);
+  const [step, setStep] = useState(1);
 
-  if (!shop) {
+  /* -----------------------------
+     Resolve merchant identity
+  ------------------------------ */
+  useEffect(() => {
+    if (!shop) {
+      setError("Missing shop parameter");
+      return;
+    }
+
+    let cancelled = false;
+
+    async function resolve(): Promise<ResolveResult> {
+      const profile = await getMerchantProfileByShop(shop);
+
+      if (!profile.ok) {
+        return { ok: false, error: profile.error || "Profile lookup failed" };
+      }
+
+      const data = profile.data as MerchantProfile | null;
+
+      if (!data?.merchant_id) {
+        return { ok: false, error: "Unable to resolve merchant identity" };
+      }
+
+      return {
+        ok: true,
+        merchant_id: data.merchant_id,
+        created: false,
+      };
+    }
+
+    async function run() {
+      setBusy(true);
+      setError(null);
+
+      const result = await resolve();
+
+      if (cancelled) return;
+
+      if (!result.ok) {
+        setBusy(false);
+        setError(result.error);
+        return;
+      }
+
+      setMerchantId(result.merchant_id);
+      setBusy(false);
+      setStep(2);
+    }
+
+    run();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [shop]);
+
+  /* -----------------------------
+     UI
+  ------------------------------ */
+
+  if (busy) {
+    return <div className="p-6 text-sm text-gray-500">Initializing…</div>;
+  }
+
+  if (error) {
     return (
-      <div style={{ padding: 32 }}>
-        <h1>Exclusivity — Onboarding</h1>
-        <p style={{ color: "crimson" }}>Missing shop parameter</p>
+      <div className="p-6 space-y-2">
+        <div className="text-lg font-semibold">Exclusivity — Onboarding</div>
+        <div className="text-sm text-red-600">{error}</div>
       </div>
     );
   }
 
-  async function resolveMerchant(): Promise<ResolveResult> {
-    const status = await getBrandStatusByShop(shop);
-    if (!status.ok) {
-      return { ok: false, error: "Brand status check failed" };
-    }
-
-    const profile = await getMerchantProfileByShop(shop);
-    if (profile.ok && profile.data?.merchant_id) {
-      return {
-        ok: true,
-        merchant_id: profile.data.merchant_id,
-      };
-    }
-
-    const ingest = await apiPost<{ merchant_id: string }>(
-      "/brand/ingest",
-      { shop_domain: shop }
-    );
-
-    if (!ingest.ok || !ingest.data?.merchant_id) {
-      return { ok: false, error: "Merchant bootstrap failed" };
-    }
-
-    return {
-      ok: true,
-      merchant_id: ingest.data.merchant_id,
-      created: true,
-    };
-  }
-
-  async function handleContinue() {
-    setBusy(true);
-    setError(null);
-
-    const result = await resolveMerchant();
-
-    if (result.ok === false) {
-      setBusy(false);
-      setError(result.error);
-      return;
-    }
-
-    router.replace(`/dashboard?merchant_id=${result.merchant_id}`);
-  }
-
   return (
-    <div style={{ padding: 32 }}>
-      <h1>Exclusivity — Onboarding</h1>
+    <div className="p-6 space-y-3">
+      <div className="text-lg font-semibold">Exclusivity — Onboarding</div>
+      <div className="text-sm text-gray-500">Step {step} of 5</div>
 
-      {error && <p style={{ color: "crimson" }}>{error}</p>}
-
-      <button onClick={handleContinue} disabled={busy}>
-        {busy ? "Initializing…" : "Continue"}
-      </button>
+      {merchantId && (
+        <div className="text-xs text-gray-400">
+          merchant_id: {merchantId}
+        </div>
+      )}
     </div>
   );
 }
