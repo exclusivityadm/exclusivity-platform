@@ -8,8 +8,15 @@ import { BriefingPanel } from "@/components/dashboard/BriefingPanel";
 import {
   getSystemHealth,
   getLoyaltyHealth,
-  getDailyBriefing,
 } from "@/lib/dashboardApi";
+import {
+  getLatestPricing,
+  getMintJobs,
+  getLatestInvoice,
+} from "@/lib/ui03Api";
+import { PricingPanel } from "@/components/dashboard/PricingPanel";
+import { MintActivityPanel } from "@/components/dashboard/MintActivityPanel";
+import { InvoicePanel } from "@/components/dashboard/InvoicePanel";
 
 function param(name: string) {
   if (typeof window === "undefined") return "";
@@ -22,15 +29,23 @@ export default function DashboardPage() {
   const [sys, setSys] = useState<any | null>(null);
   const [loyalty, setLoyalty] = useState<any | null>(null);
   const [briefing, setBriefing] = useState<any | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  const [pricing, setPricing] = useState<any | null>(null);
+  const [jobs, setJobs] = useState<any[] | null>(null);
+  const [invoice, setInvoice] = useState<any | null>(null);
 
   useEffect(() => {
-    setErr(null);
     getSystemHealth().then((r) => r.ok && setSys(r.data));
     getLoyaltyHealth().then((r) => r.ok && setLoyalty(r.data));
-    if (merchant_id) {
-      getDailyBriefing(merchant_id).then((r) => r.ok && setBriefing(r.data));
-    }
+  }, []);
+
+  useEffect(() => {
+    if (!merchant_id) return;
+    import("@/lib/dashboardApi").then(({ getDailyBriefing }) => {
+      getDailyBriefing(merchant_id).then((r: any) => r.ok && setBriefing(r.data));
+    });
+    getLatestPricing(merchant_id).then((r) => r.ok && setPricing(r.data));
+    getMintJobs(merchant_id).then((r) => r.ok && setJobs(r.data));
+    getLatestInvoice(merchant_id).then((r) => r.ok && setInvoice(r.data));
   }, [merchant_id]);
 
   return (
@@ -46,31 +61,17 @@ export default function DashboardPage() {
 
         <Section title="Engine Health">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            <MetricCard
-              label="System"
-              value={sys?.ok ? "OK" : "Unknown"}
-              hint="/health"
-            />
-            <MetricCard
-              label="Loyalty"
-              value={loyalty?.ok ? "OK" : "Unknown"}
-              hint="/loyalty/health"
-            />
-            <MetricCard
-              label="Merchant"
-              value={merchant_id || "Not provided"}
-              hint="pass ?merchant_id=..."
-            />
+            <MetricCard label="System" value={sys?.ok ? "OK" : "—"} />
+            <MetricCard label="Loyalty" value={loyalty?.ok ? "OK" : "—"} />
+            <MetricCard label="Merchant" value={merchant_id || "—"} />
           </div>
         </Section>
 
         <BriefingPanel briefing={briefing?.briefing ?? briefing} />
 
-        {err && (
-          <div className="text-sm text-red-400">
-            {err}
-          </div>
-        )}
+        <PricingPanel rec={pricing} />
+        <MintActivityPanel jobs={jobs} />
+        <InvoicePanel invoice={invoice} />
       </div>
     </div>
   );
