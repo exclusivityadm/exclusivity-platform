@@ -1,24 +1,26 @@
 # apps/backend/routes/merchant.py
 # =====================================================
-# Exclusivity Backend — Merchant Routes (Canonical)
+# Exclusivity Backend — Merchant Routes (Step G)
 #
 # Routes:
-#   GET /merchant/profile?shop_domain=...
-#   GET /merchant/status?shop_domain=...
-#   GET /merchant/settings?merchant_id=...
-#   GET /merchant/tiers?merchant_id=...
+#   GET  /merchant/profile?shop_domain=...
+#   GET  /merchant/settings?merchant_id=...
+#   GET  /merchant/tiers?merchant_id=...
+#   POST /merchant/tiers/seed-defaults?merchant_id=...
 #
-# Source of truth:
-#   merchants.install_state (enum)
-#
-# States:
-#   created | oauth_complete | backfill_pending | backfill_running | ready | error
+# Notes:
+# - Service-role only access to tiers for now
+# - Worker token required for seeding defaults
 # =====================================================
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
-from typing import Any, Dict, Optional
+import os
+import json
+from typing import Dict, Any, Optional
+
+import requests
+from fastapi import APIRouter, HTTPException, Request
 
 from apps.backend.routes.services.supabase_admin import (
     SupabaseAdminError,
@@ -28,27 +30,74 @@ from apps.backend.routes.services.supabase_admin import (
 router = APIRouter(tags=["merchant"])  # prefix owned by main.py
 
 
-def _normalize_shop_domain(shop_domain: str) -> str:
-    return (shop_domain or "").strip().lower()
+# -----------------------------------------------------
+# Env + security
+# -----------------------------------------------------
+
+def _env(name: str, default: str = "") -> str:
+    return (os.getenv(name, default) or "").strip()
+
+def _must_env(name: str) -> str:
+    v = _env(name)
+    if not v:
+        raise RuntimeError(f"Missing env var: {name}")
+    return v
+
+def require_worker_token(request: Request) -> None:
+    expected = _must_env("BACKFILL_WORKER_TOKEN")
+    got = (request.headers.get("X-Worker-Token") or "").strip()
+    if not got or got != expected:
+        raise HTTPException(401, "Invalid worker token")
 
 
-def _installed_from_state(state: Optional[str], legacy_installed: Optional[bool]) -> bool:
-    """
-    Canonical: installed = state == ready
-    Legacy fallback: installed boolean if state missing
-    """
-    if state:
-        return state == "ready"
-    return bool(legacy_installed) if legacy_installed is not None else False
+# -----------------------------------------------------
+# Supabase REST (service role)
+# -----------------------------------------------------
 
+def sb_headers() -> Dict[str, str]:
+    key = _must_env("SUPABASE_SERVICE_ROLE_KEY")
+    return {
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+
+def sb_url(path: str) -> str:
+    return _must_env("SUPABASE_URL").rstrip("/") + path
+
+def sb_select(table: str, qs: str) -> list[dict]:
+    r = requests.get(
+        sb_url(f"/rest/v1/{table}?{qs}"),
+        headers=sb_headers(),
+        timeout=30,
+    )
+    if r.status_code >= 400:
+        raise HTTPException(500, f"Supabase select error: {r.text}")
+    return r.json()
+
+def sb_insert_many(table: str, rows: list[Dict[str, Any]]) -> None:
+    if not rows:
+        return
+    h = sb_headers()
+    h["Prefer"] = "resolution=merge-duplicates,return=minimal"
+    r = requests.post(
+        sb_url(f"/rest/v1/{table}"),
+        headers=h,
+        data=json.dumps(rows),
+        timeout=30,
+    )
+    if r.status_code >= 400:
+        raise HTTPException(500, f"Supabase insert error: {r.text}")
+
+
+# -----------------------------------------------------
+# Merchant profile (existing)
+# -----------------------------------------------------
 
 @router.get("/profile")
 def merchant_profile(shop_domain: str):
-    """
-    Resolve canonical merchant identity by shop domain.
-    Returns merchant_id (Exclusivity UUID) as the primary key.
-    """
-    shop_domain = _normalize_shop_domain(shop_domain)
+    shop_domain = (shop_domain or "").strip().lower()
     if not shop_domain:
         raise HTTPException(400, "Missing shop_domain")
 
@@ -56,26 +105,16 @@ def merchant_profile(shop_domain: str):
         m = select_one(
             "merchants",
             {"shop_domain": shop_domain},
-            columns="merchant_id,shop_domain,installed,install_state,install_error,oauth_completed_at,ready_at,created_at,updated_at",
+            columns="merchant_id,shop_domain,installed,created_at,updated_at",
         )
-
         if not m:
-            # Frontend treats this as "not yet installed"
             raise HTTPException(404, "Merchant not found for shop_domain")
-
-        state = m.get("install_state")
-        legacy_installed = m.get("installed")
 
         return {
             "ok": True,
             "merchant_id": m.get("merchant_id"),
             "shop_domain": m.get("shop_domain"),
-            # Canonical:
-            "install_state": state or "created",
-            "install_error": m.get("install_error"),
-            "installed": _installed_from_state(state, legacy_installed),
-            "oauth_completed_at": m.get("oauth_completed_at"),
-            "ready_at": m.get("ready_at"),
+            "installed": bool(m.get("installed")) if m.get("installed") is not None else True,
             "created_at": m.get("created_at"),
             "updated_at": m.get("updated_at"),
         }
@@ -88,70 +127,56 @@ def merchant_profile(shop_domain: str):
         raise HTTPException(500, f"merchant/profile error: {e}")
 
 
-@router.get("/status")
-def merchant_status(shop_domain: str):
-    """
-    Lightweight status endpoint for onboarding + dashboard gating.
-    """
-    shop_domain = _normalize_shop_domain(shop_domain)
-    if not shop_domain:
-        raise HTTPException(400, "Missing shop_domain")
-
-    try:
-        m = select_one(
-            "merchants",
-            {"shop_domain": shop_domain},
-            columns="merchant_id,shop_domain,installed,install_state,install_error,oauth_completed_at,ready_at,created_at,updated_at",
-        )
-
-        if not m:
-            return {
-                "ok": True,
-                "exists": False,
-                "shop_domain": shop_domain,
-                "install_state": "created",
-                "installed": False,
-            }
-
-        state = m.get("install_state")
-        legacy_installed = m.get("installed")
-        installed = _installed_from_state(state, legacy_installed)
-
-        return {
-            "ok": True,
-            "exists": True,
-            "merchant_id": m.get("merchant_id"),
-            "shop_domain": m.get("shop_domain"),
-            "install_state": state or ("ready" if installed else "created"),
-            "install_error": m.get("install_error"),
-            "installed": installed,
-            "oauth_completed_at": m.get("oauth_completed_at"),
-            "ready_at": m.get("ready_at"),
-            "created_at": m.get("created_at"),
-            "updated_at": m.get("updated_at"),
-        }
-
-    except SupabaseAdminError as e:
-        raise HTTPException(500, str(e))
-    except Exception as e:
-        raise HTTPException(500, f"merchant/status error: {e}")
-
-
 @router.get("/settings")
 def merchant_settings(merchant_id: str):
-    """
-    Minimal stable shape. Expanded later.
-    """
     if not merchant_id:
         raise HTTPException(400, "Missing merchant_id")
     return {"ok": True, "merchant_id": merchant_id, "settings": {}}
 
 
+# -----------------------------------------------------
+# Tiers (Step G)
+# -----------------------------------------------------
+
 @router.get("/tiers")
 def merchant_tiers(merchant_id: str):
-    """
-    Minimal stable shape. Expanded later.
-    """
+    merchant_id = (merchant_id or "").strip()
     if not merchant_id:
         raise HTTPException(400, "Missing merchant_id")
-    return {"ok": True, "merchant_id": merchant_id, "tiers": []}
+
+    tiers = sb_select(
+        "loyalty_tiers",
+        f"merchant_id=eq.{merchant_id}&select=tier_rank,tier_name,threshold_points,benefits&order=tier_rank.asc",
+    )
+
+    return {"ok": True, "merchant_id": merchant_id, "tiers": tiers}
+
+
+@router.post("/tiers/seed-defaults")
+def seed_default_tiers(request: Request, merchant_id: str):
+    """
+    Creates default tiers IF none exist. Safe to call repeatedly.
+    """
+    require_worker_token(request)
+
+    merchant_id = (merchant_id or "").strip()
+    if not merchant_id:
+        raise HTTPException(400, "Missing merchant_id")
+
+    existing = sb_select(
+        "loyalty_tiers",
+        f"merchant_id=eq.{merchant_id}&select=tier_rank&limit=1",
+    )
+    if existing:
+        return {"ok": True, "merchant_id": merchant_id, "seeded": False, "reason": "tiers already exist"}
+
+    defaults = [
+        {"merchant_id": merchant_id, "tier_rank": 1, "tier_name": "Tier 1", "threshold_points": 0, "benefits": {}},
+        {"merchant_id": merchant_id, "tier_rank": 2, "tier_name": "Tier 2", "threshold_points": 250, "benefits": {}},
+        {"merchant_id": merchant_id, "tier_rank": 3, "tier_name": "Tier 3", "threshold_points": 500, "benefits": {}},
+        {"merchant_id": merchant_id, "tier_rank": 4, "tier_name": "Tier 4", "threshold_points": 1000, "benefits": {}},
+    ]
+
+    sb_insert_many("loyalty_tiers", defaults)
+
+    return {"ok": True, "merchant_id": merchant_id, "seeded": True, "count": len(defaults)}
