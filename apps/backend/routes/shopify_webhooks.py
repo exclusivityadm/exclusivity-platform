@@ -1,61 +1,80 @@
-import os
-import base64
-import hmac
-import hashlib
-from typing import Any, Dict
+# apps/backend/routes/shopify_webhooks.py
+# =====================================================
+# Exclusivity Backend — Shopify Webhooks (Minimal)
+#
+# Handles:
+#   - app/uninstalled
+#
+# Notes:
+# - No HMAC verification yet (Step 19)
+# - Ingest-only, idempotent-safe
+# =====================================================
 
-from fastapi import APIRouter, Request, Header, HTTPException
+from __future__ import annotations
 
-from apps.backend.routes.services.supabase_admin import select_one
-from apps.backend.routes.services.shopify_incremental_service import process_order_paid, process_order_refunded
+from fastapi import APIRouter, Request, HTTPException
+from datetime import datetime, timezone
 
-router = APIRouter(prefix="/shopify", tags=["shopify"])
+from apps.backend.routes.services.supabase_admin import (
+    SupabaseAdminError,
+    select_one,
+    update_one,
+)
 
-SHOPIFY_WEBHOOK_SECRET = os.getenv("SHOPIFY_WEBHOOK_SECRET", "")
+router = APIRouter(tags=["shopify"])
 
-def _verify(raw: bytes, hmac_header: str) -> bool:
-    if not SHOPIFY_WEBHOOK_SECRET:
-        return False
-    digest = hmac.new(SHOPIFY_WEBHOOK_SECRET.encode("utf-8"), raw, hashlib.sha256).digest()
-    computed = base64.b64encode(digest).decode("utf-8")
-    return hmac.compare_digest(computed, hmac_header or "")
 
-@router.post("/webhook")
-async def shopify_webhook(
-    request: Request,
-    x_shopify_hmac_sha256: str = Header(default=""),
-    x_shopify_topic: str = Header(default=""),
-    x_shopify_shop_domain: str = Header(default=""),
-):
-    raw = await request.body()
-    if not _verify(raw, x_shopify_hmac_sha256):
-        raise HTTPException(status_code=401, detail="invalid_signature")
+@router.post("/shopify/webhooks/app_uninstalled")
+async def shopify_app_uninstalled(request: Request):
+    """
+    Shopify webhook: app/uninstalled
+    """
 
-    topic = (x_shopify_topic or "").strip().lower()
-    shop_domain = (x_shopify_shop_domain or "").strip().lower()
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON payload")
 
-    merchant = select_one("merchants", {"shop_domain": shop_domain})
-    if not merchant:
-        return {"ok": True, "ignored": True, "reason": "merchant_not_found"}
+    shop_domain = (payload.get("myshopify_domain") or "").strip().lower()
 
-    if merchant.get("engine_state") != "ready":
-        # accept to stop Shopify retry storms; do not mutate before engine is ready
-        return {"ok": True, "ignored": True, "reason": "engine_not_ready"}
+    if not shop_domain:
+        raise HTTPException(400, "Missing myshopify_domain")
 
-    payload: Dict[str, Any] = await request.json()
-
-    if topic == "orders/paid":
-        return process_order_paid(
-            merchant_id=merchant["id"],
-            points_per_dollar=float(merchant.get("points_per_dollar") or 1.0),
-            order=payload,
+    try:
+        merchant = select_one(
+            "merchants",
+            {"shop_domain": shop_domain},
+            columns="merchant_id,installed",
         )
 
-    if topic == "orders/refunded":
-        return process_order_refunded(
-            merchant_id=merchant["id"],
-            points_per_dollar=float(merchant.get("points_per_dollar") or 1.0),
-            order=payload,
+        # If merchant does not exist, webhook is still considered successful
+        if not merchant:
+            return {"ok": True, "ignored": True}
+
+        # Idempotent uninstall
+        if merchant.get("installed") is False:
+            return {
+                "ok": True,
+                "merchant_id": merchant["merchant_id"],
+                "already_uninstalled": True,
+            }
+
+        update_one(
+            "merchants",
+            {"merchant_id": merchant["merchant_id"]},
+            {
+                "installed": False,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
         )
 
-    return {"ok": True, "ignored": True, "reason": f"unhandled_topic:{topic}"}
+        return {
+            "ok": True,
+            "merchant_id": merchant["merchant_id"],
+            "already_uninstalled": False,
+        }
+
+    except SupabaseAdminError as e:
+        raise HTTPException(500, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"shopify/app_uninstalled error: {e}")
