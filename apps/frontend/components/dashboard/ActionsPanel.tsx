@@ -3,26 +3,6 @@
 import { useState } from "react";
 import { previewAction } from "@/lib/exclusivityApi";
 
-/* ---------------------------------
-   Local canonical result
----------------------------------- */
-
-type PreviewOk = {
-  ok: true;
-  data: any;
-};
-
-type PreviewFail = {
-  ok: false;
-  message: string;
-};
-
-type PreviewResult = PreviewOk | PreviewFail;
-
-/* ---------------------------------
-   Component
----------------------------------- */
-
 export default function ActionsPanel({ merchantId }: { merchantId: string }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -32,20 +12,16 @@ export default function ActionsPanel({ merchantId }: { merchantId: string }) {
     setBusy(true);
     setErr(null);
 
-    // ✅ FIX: pass merchantId explicitly
     const res = await previewAction(merchantId, action);
 
-    const normalized: PreviewResult = res.ok
-      ? { ok: true, data: res.data }
-      : { ok: false, message: "Preview failed" };
-
-    if (!normalized.ok) {
-      setErr(normalized.message);
+    // ✅ CANONICAL BRANCH — no union leakage
+    if (!res.ok) {
+      setErr("Preview failed");
       setBusy(false);
       return;
     }
 
-    setPreview(normalized.data);
+    setPreview(res.data);
     setBusy(false);
   }
 
