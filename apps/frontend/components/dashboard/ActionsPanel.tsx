@@ -3,11 +3,7 @@
 import React, { useMemo, useState } from "react";
 import { Section } from "./Section";
 import { ActionModal } from "./ActionModal";
-import {
-  previewAction,
-  executeAction,
-  ActionPayload,
-} from "@/lib/ui04Actions";
+import { previewAction, executeAction, ActionPayload } from "@/lib/ui04Actions";
 import { downloadCsv } from "@/lib/csv";
 
 export function ActionsPanel(props: {
@@ -22,9 +18,7 @@ export function ActionsPanel(props: {
   const [execResult, setExecResult] = useState<any | null>(null);
   const [executing, setExecuting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [pendingAction, setPendingAction] = useState<ActionPayload | null>(
-    null
-  );
+  const [pendingAction, setPendingAction] = useState<ActionPayload | null>(null);
 
   const failedJobsCount = useMemo(() => {
     const list = props.jobs || [];
@@ -41,9 +35,9 @@ export function ActionsPanel(props: {
 
     const p = await previewAction(action);
 
+    // ✅ Discriminated union narrowing (canonical)
     if (!p.ok) {
-      const err = "error" in p ? p.error : "Preview failed";
-      setError(err);
+      setError(p.error);
       return;
     }
 
@@ -61,10 +55,9 @@ export function ActionsPanel(props: {
 
     setExecuting(false);
 
+    // ✅ Discriminated union narrowing (canonical)
     if (!r.ok) {
-      const err = "error" in r ? r.error : "Execution failed";
-      setError(err);
-      setExecResult("details" in r ? r.details : null);
+      setError(r.error);
       return;
     }
 
@@ -106,7 +99,7 @@ export function ActionsPanel(props: {
             </button>
           </div>
 
-          {/* Retry Mints */}
+          {/* Retry Failed Mints */}
           <div className="rounded-xl border border-neutral-800 bg-neutral-950/40 p-4">
             <div className="text-sm font-medium">Retry Failed Mints</div>
             <div className="mt-1 text-xs text-neutral-400">
@@ -134,4 +127,29 @@ export function ActionsPanel(props: {
           <div className="rounded-xl border border-neutral-800 bg-neutral-950/40 p-4">
             <div className="text-sm font-medium">Export Invoice</div>
             <div className="mt-1 text-xs text-neutral-400">
-              Download latest invoice snapsho
+              Download latest invoice snapshot as CSV.
+            </div>
+            <button
+              className="mt-3 w-full rounded-lg bg-white px-3 py-2 text-sm text-black disabled:opacity-60"
+              disabled={!props.invoice}
+              onClick={exportInvoiceCsv}
+            >
+              Download CSV
+            </button>
+          </div>
+        </div>
+      </Section>
+
+      <ActionModal
+        open={open}
+        title={title}
+        preview={preview}
+        execResult={execResult}
+        executing={executing}
+        error={error}
+        onClose={() => setOpen(false)}
+        onExecute={onExecute}
+      />
+    </>
+  );
+}
