@@ -1,98 +1,179 @@
-import os
-import uuid
-import requests
-from typing import Any, Dict, List, Optional
+# apps/backend/routes/services/supabase_admin.py
+# =====================================================
+# Supabase Admin Helpers (Service Role, Server-Side ONLY)
+#
+# Provides canonical helpers used by backend routes:
+#   - select_one(table, match, columns="*")
+#   - insert_one(table, row, columns="*")
+#   - update_one(table, match, values, columns="*")
+#
+# Uses Supabase PostgREST:
+#   {SUPABASE_URL}/rest/v1/<table>
+#
+# Required env:
+#   SUPABASE_URL
+#   SUPABASE_SERVICE_ROLE_KEY
+#
+# Notes:
+# - This bypasses RLS because it uses the service role key.
+# - Never call these from the frontend.
+# =====================================================
 
-SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
-SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+from __future__ import annotations
+
+import os
+import json
+import requests
+from typing import Any, Dict, Optional
+
 
 class SupabaseAdminError(Exception):
     pass
 
+
+def _env(name: str) -> str:
+    v = (os.getenv(name) or "").strip()
+    if not v:
+        raise SupabaseAdminError(f"Missing environment variable: {name}")
+    return v
+
+
+def _base_url() -> str:
+    url = _env("SUPABASE_URL").rstrip("/")
+    return url
+
+
 def _headers() -> Dict[str, str]:
-    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
-        raise SupabaseAdminError("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY")
+    key = _env("SUPABASE_SERVICE_ROLE_KEY")
     return {
-        "apikey": SUPABASE_SERVICE_ROLE_KEY,
-        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
         "Accept": "application/json",
     }
 
-def _rest_url(table: str) -> str:
-    if not SUPABASE_URL:
-        raise SupabaseAdminError("Missing SUPABASE_URL")
-    return f"{SUPABASE_URL}/rest/v1/{table}"
 
-def new_uuid() -> str:
-    return str(uuid.uuid4())
+def _table_url(table: str) -> str:
+    t = (table or "").strip()
+    if not t:
+        raise SupabaseAdminError("Missing table name")
+    return f"{_base_url()}/rest/v1/{t}"
 
-def rpc(function_name: str, payload: Dict[str, Any]) -> List[Dict[str, Any]]:
-    url = f"{SUPABASE_URL}/rest/v1/rpc/{function_name}"
-    r = requests.post(url, headers=_headers(), json=payload, timeout=30)
-    if r.status_code != 200:
-        raise SupabaseAdminError(f"RPC {function_name} failed: {r.status_code} {r.text}")
-    return r.json()
 
-def insert_one(table: str, row: Dict[str, Any]) -> Dict[str, Any]:
-    h = _headers()
-    h["Prefer"] = "return=representation"
-    r = requests.post(_rest_url(table), headers=h, json=[row], timeout=30)
-    if r.status_code not in (200, 201):
-        raise SupabaseAdminError(f"Insert failed ({table}): {r.status_code} {r.text}")
-    data = r.json()
-    return data[0] if data else row
+def _apply_filters(params: Dict[str, str], match: Dict[str, Any]) -> Dict[str, str]:
+    """
+    Converts match dict into PostgREST filters.
+    Example:
+      match={"merchant_id":"uuid"} -> params["merchant_id"] = "eq.uuid"
+    """
+    if not match:
+        return params
+    for k, v in match.items():
+        if v is None:
+            continue
+        params[str(k)] = f"eq.{v}"
+    return params
 
-def upsert_one(table: str, row: Dict[str, Any], conflict_cols: str) -> Dict[str, Any]:
-    h = _headers()
-    h["Prefer"] = "resolution=merge-duplicates,return=representation"
-    r = requests.post(
-        _rest_url(table),
-        headers=h,
-        params={"on_conflict": conflict_cols},
-        json=[row],
-        timeout=30,
+
+def _handle(resp: requests.Response, context: str) -> Any:
+    """
+    Raise SupabaseAdminError with useful context if non-2xx.
+    """
+    if 200 <= resp.status_code < 300:
+        if resp.text.strip() == "":
+            return None
+        try:
+            return resp.json()
+        except Exception:
+            return resp.text
+
+    body = resp.text
+    # Try to parse JSON error shape
+    try:
+        body_json = resp.json()
+        body = json.dumps(body_json, ensure_ascii=False)
+    except Exception:
+        pass
+
+    raise SupabaseAdminError(
+        f"{context} failed: status={resp.status_code} body={body}"
     )
-    if r.status_code not in (200, 201):
-        raise SupabaseAdminError(f"Upsert failed ({table}): {r.status_code} {r.text}")
-    data = r.json()
-    return data[0] if data else row
 
-def select_one(table: str, filters: Dict[str, str], columns: str = "*") -> Optional[Dict[str, Any]]:
-    params = {"select": columns}
-    for k, v in filters.items():
-        params[k] = f"eq.{v}"
-    r = requests.get(_rest_url(table), headers=_headers(), params=params, timeout=30)
-    if r.status_code != 200:
-        raise SupabaseAdminError(f"Select failed ({table}): {r.status_code} {r.text}")
-    data = r.json()
-    return data[0] if data else None
 
-def select_many(
-    table: str,
-    filters: Optional[Dict[str, str]] = None,
-    columns: str = "*",
-    order: Optional[str] = None,
-    limit: Optional[int] = None,
-) -> List[Dict[str, Any]]:
-    params: Dict[str, str] = {"select": columns}
-    if filters:
-        for k, v in filters.items():
-            params[k] = f"eq.{v}"
-    if order:
-        params["order"] = order
-    if limit is not None:
-        params["limit"] = str(limit)
+# =====================================================
+# READ
+# =====================================================
 
-    r = requests.get(_rest_url(table), headers=_headers(), params=params, timeout=30)
-    if r.status_code != 200:
-        raise SupabaseAdminError(f"Select many failed ({table}): {r.status_code} {r.text}")
-    return r.json()
+def select_one(table: str, match: Dict[str, Any], columns: str = "*") -> Optional[Dict[str, Any]]:
+    """
+    Select a single row by match dict. Returns dict or None.
+    """
+    url = _table_url(table)
+    params: Dict[str, str] = {"select": columns, "limit": "1"}
+    params = _apply_filters(params, match)
 
-def update_where(table: str, filters: Dict[str, str], patch: Dict[str, Any]) -> None:
-    params = {k: f"eq.{v}" for k, v in filters.items()}
-    h = _headers()
-    h["Prefer"] = "return=minimal"
-    r = requests.patch(_rest_url(table), headers=h, params=params, json=patch, timeout=30)
-    if r.status_code not in (200, 204):
-        raise SupabaseAdminError(f"Update failed ({table}): {r.status_code} {r.text}")
+    resp = requests.get(url, headers=_headers(), params=params, timeout=30)
+    data = _handle(resp, f"select_one({table})")
+
+    # PostgREST returns a list of rows
+    if isinstance(data, list) and len(data) > 0:
+        row = data[0]
+        return row if isinstance(row, dict) else None
+    return None
+
+
+# =====================================================
+# WRITE
+# =====================================================
+
+def insert_one(table: str, row: Dict[str, Any], columns: str = "*") -> Optional[Dict[str, Any]]:
+    """
+    Insert a single row.
+    Returns inserted row (representation) when possible, else None.
+    """
+    if not isinstance(row, dict) or not row:
+        raise SupabaseAdminError("insert_one requires a non-empty dict row")
+
+    url = _table_url(table)
+    headers = _headers()
+    # Ask PostgREST to return the inserted row
+    headers["Prefer"] = "return=representation"
+
+    params: Dict[str, str] = {"select": columns} if columns else {}
+    resp = requests.post(url, headers=headers, params=params, data=json.dumps(row), timeout=30)
+    data = _handle(resp, f"insert_one({table})")
+
+    # Usually returns a list with one row
+    if isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict):
+        return data[0]
+    # Some configurations return dict directly
+    if isinstance(data, dict):
+        return data
+    return None
+
+
+def update_one(table: str, match: Dict[str, Any], values: Dict[str, Any], columns: str = "*") -> Optional[Dict[str, Any]]:
+    """
+    Update rows matching `match` with `values`.
+    Returns the first updated row (representation) when possible, else None.
+    """
+    if not match or not isinstance(match, dict):
+        raise SupabaseAdminError("update_one requires a non-empty match dict")
+    if not isinstance(values, dict) or not values:
+        raise SupabaseAdminError("update_one requires a non-empty values dict")
+
+    url = _table_url(table)
+    headers = _headers()
+    headers["Prefer"] = "return=representation"
+
+    params: Dict[str, str] = {"select": columns} if columns else {}
+    params = _apply_filters(params, match)
+
+    resp = requests.patch(url, headers=headers, params=params, data=json.dumps(values), timeout=30)
+    data = _handle(resp, f"update_one({table})")
+
+    if isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict):
+        return data[0]
+    if isinstance(data, dict):
+        return data
+    return None
