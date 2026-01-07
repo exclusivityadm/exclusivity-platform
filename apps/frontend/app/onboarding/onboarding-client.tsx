@@ -5,17 +5,24 @@ import { useSearchParams } from "next/navigation";
 import { getMerchantProfileByShop } from "@/lib/exclusivityApi";
 
 /* ---------------------------------
-   Canonical local result types
+   Canonical local types
 ---------------------------------- */
 
 type MerchantProfile = {
   merchant_id: string;
-  shop_domain?: string | null;
 };
 
-type ResolveResult =
-  | { ok: true; merchant_id: string }
-  | { ok: false; message: string };
+type ResolveSuccess = {
+  ok: true;
+  merchant_id: string;
+};
+
+type ResolveFail = {
+  ok: false;
+  message: string;
+};
+
+type ResolveResult = ResolveSuccess | ResolveFail;
 
 /* ---------------------------------
    Component
@@ -62,13 +69,15 @@ export default function OnboardingClient() {
 
       if (cancelled) return;
 
-      if (!result.ok) {
+      if (result.ok === false) {
+        const { message } = result; // ✅ explicit branch extraction
         setBusy(false);
-        setError(result.message);
+        setError(message);
         return;
       }
 
-      setMerchantId(result.merchant_id);
+      const { merchant_id } = result; // ✅ explicit success branch
+      setMerchantId(merchant_id);
       setStep(2);
       setBusy(false);
     }
