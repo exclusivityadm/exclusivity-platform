@@ -1,33 +1,64 @@
-// apps/backend/routes/onboarding.ts
-import { Router } from "express";
-import { ApiResult, err, ok, fromException } from "../shared/apiResult";
-import { ensureMerchantByShop } from "../services/merchantService";
+# apps/backend/routes/onboarding.py
 
-const router = Router();
+from fastapi import APIRouter, Request
+from typing import Any, Dict
+import logging
 
-type ResolveOnboardingResult = {
-  merchant_id: string;
-  created: boolean;
-  shop_domain: string;
-};
+log = logging.getLogger("uvicorn")
 
-router.post("/resolve", async (req, res) => {
-  try {
-    const shop = (req.body?.shop || req.query?.shop || "").toString();
+router = APIRouter()
 
-    const r = await ensureMerchantByShop(shop);
-    if (!r.ok) return res.status(400).json(r);
+# ----------------------------------------------------------
+# CANONICAL API RESPONSE HELPERS
+# ----------------------------------------------------------
 
-    const payload: ResolveOnboardingResult = {
-      merchant_id: r.data.merchant_id,
-      created: r.data.created,
-      shop_domain: r.data.shop_domain,
-    };
+def ok(data: Any) -> Dict[str, Any]:
+    return {"ok": True, "data": data}
 
-    return res.json(ok(payload));
-  } catch (e) {
-    return res.status(500).json(fromException("Resolve failed", e));
-  }
-});
+def err(message: str, details: Any = None) -> Dict[str, Any]:
+    payload = {"ok": False, "error": message}
+    if details is not None:
+        payload["details"] = details
+    return payload
 
-export default router;
+# ----------------------------------------------------------
+# MERCHANT RESOLUTION (STUB — SAFE FOR NOW)
+# ----------------------------------------------------------
+# This is intentionally conservative and deterministic.
+# We can wire Supabase later without changing the contract.
+
+def normalize_shop(shop: str) -> str:
+    return shop.strip().lower().replace("https://", "").replace("http://", "").rstrip("/")
+
+async def resolve_merchant(shop: str) -> Dict[str, Any]:
+    if not shop:
+        return err("Missing shop parameter")
+
+    shop = normalize_shop(shop)
+
+    # TEMPORARY LOGIC:
+    # Treat any shop as resolvable for now.
+    # Later: replace with Supabase lookup + create.
+    merchant_id = f"m_{abs(hash(shop))}"
+
+    return ok({
+        "merchant_id": merchant_id,
+        "shop_domain": shop,
+        "created": False
+    })
+
+# ----------------------------------------------------------
+# ROUTES
+# ----------------------------------------------------------
+
+@router.post("/resolve")
+async def onboarding_resolve(request: Request):
+    try:
+        body = await request.json()
+        shop = body.get("shop") or request.query_params.get("shop")
+
+        return await resolve_merchant(shop)
+
+    except Exception as e:
+        log.exception("Onboarding resolve failed")
+        return err("Onboarding resolve failed", str(e))
