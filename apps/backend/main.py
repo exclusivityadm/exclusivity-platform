@@ -1,5 +1,4 @@
 # apps/backend/main.py
-
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 import os
@@ -92,7 +91,7 @@ include_router_if_exists("apps.backend.routes.supabase", prefix="/supabase", tag
 include_router_if_exists("apps.backend.routes.blockchain", prefix="/blockchain", tags=["blockchain"])
 include_router_if_exists("apps.backend.routes.voice", prefix="/voice", tags=["voice"])
 
-# Brand + Pricing Intelligence (install-time)
+# Brand + Pricing
 include_router_if_exists("apps.backend.routes.brand", prefix="/brand", tags=["brand"])
 include_router_if_exists("apps.backend.routes.pricing", prefix="/pricing", tags=["pricing"])
 
@@ -105,15 +104,15 @@ if enabled("FEATURE_LOYALTY", "true"):
     include_router_if_exists("apps.backend.routes.loyalty", prefix="/loyalty", tags=["loyalty"])
     include_router_if_exists("apps.backend.routes.merchant", prefix="/merchant", tags=["merchant"])
 
-# Rewards + Notifications (Step H)
-if enabled("FEATURE_REWARDS", "true"):
-    include_router_if_exists("apps.backend.routes.rewards", prefix="/rewards", tags=["rewards"])
-    include_router_if_exists("apps.backend.routes.notifications", prefix="/notify", tags=["notify"])
-
-# Shopify (canonical: mount BOTH routers under /shopify)
+# Shopify (ALL Shopify routes live here)
 if enabled("FEATURE_SHOPIFY_EMBED", "true"):
     include_router_if_exists("apps.backend.routes.shopify", prefix="/shopify", tags=["shopify"])
     include_router_if_exists("apps.backend.routes.shopify_oauth", prefix="/shopify", tags=["shopify"])
+    include_router_if_exists(
+        "apps.backend.routes.shopify_backfill_worker",
+        prefix="",
+        tags=["shopify-backfill-worker"],
+    )
 
 # ----------------------------------------------------------
 # DEBUG
