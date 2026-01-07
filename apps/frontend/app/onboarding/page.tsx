@@ -1,168 +1,126 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
-import { StepShell } from "@/components/onboarding/StepShell";
-import { ProgressPills } from "@/components/onboarding/ProgressPills";
-import { ButtonRow } from "@/components/onboarding/ButtonRow";
+import { useEffect, useState } from "react";
 import {
   getBrandStatusByShop,
   getDebugRoutes,
   getInitQuestions,
   getMerchantProfileByShop,
   saveInitAnswers,
-} from "@/lib/exclusivityApi";
+  type MerchantProfile,
+} from "@/lib";
 
 const STEPS = ["Welcome", "Verify Engine", "Backfill", "Brand DNA", "Done"];
 
-function param(name: string) {
+function getShopParam(): string {
   if (typeof window === "undefined") return "";
-  return new URL(window.location.href).searchParams.get(name) || "";
+  return new URL(window.location.href).searchParams.get("shop") || "";
 }
 
 export default function OnboardingPage() {
   const [step, setStep] = useState(0);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const [shop] = useState(param("shop") || param("shop_domain"));
-  const [merchantId, setMerchantId] = useState<string | undefined>();
+  const [merchantId, setMerchantId] = useState<string | null>(null);
+  const [status, setStatus] = useState<any>(null);
   const [questions, setQuestions] = useState<string[]>([]);
   const [answers, setAnswers] = useState<Record<string, string>>({});
-  const [status, setStatus] = useState<any>(null);
-
-  async function discoverMerchant() {
-    if (!shop) return;
-    const p = await getMerchantProfileByShop(shop);
-    if (p.ok) {
-      setMerchantId(p.data?.merchant_id || p.data?.id);
-      setStatus(p.data);
-      return;
-    }
-    const b = await getBrandStatusByShop(shop);
-    if (b.ok) {
-      setMerchantId(b.data?.merchant_id || b.data?.id);
-      setStatus(b.data);
-    }
-  }
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    discoverMerchant();
-    getInitQuestions().then((r) => r.ok && setQuestions(r.data.questions));
+    const run = async () => {
+      const shop = getShopParam();
+      if (!shop) {
+        setError("Missing shop parameter");
+        return;
+      }
+
+      const p = await getMerchantProfileByShop(shop);
+
+      // ✅ Explicit union narrowing (required for Next build)
+      if (p.ok === true) {
+        const data = p.data as MerchantProfile;
+
+        const id = data.merchant_id || data.id;
+        if (!id) {
+          setError("Merchant profile missing ID");
+          return;
+        }
+
+        setMerchantId(id);
+        setStatus(data);
+        return;
+      }
+
+      const b = await getBrandStatusByShop(shop);
+      if (b.ok === true) {
+        setStatus(b.data);
+        return;
+      }
+
+      setError("Unable to resolve merchant identity");
+    };
+
+    run();
   }, []);
 
-  async function verifyEngine() {
-    setBusy(true);
-    setError(null);
-    const r = await getDebugRoutes();
-    setBusy(false);
-    if (!r.ok) {
-      setError("Backend unreachable. Check NEXT_PUBLIC_BACKEND_URL.");
-      return false;
-    }
-    return true;
-  }
+  useEffect(() => {
+    if (!merchantId) return;
+    getInitQuestions().then((q) => {
+      if (q.ok) setQuestions(q.data.questions);
+    });
+  }, [merchantId]);
 
-  async function saveDNA() {
-    if (!merchantId) {
-      setError("Missing merchant_id.");
-      return false;
-    }
-    setBusy(true);
-    setError(null);
-    const r = await saveInitAnswers(merchantId, answers);
-    setBusy(false);
-    if (!r.ok) {
-      setError("Failed to save Brand DNA.");
-      return false;
-    }
-    return true;
+  async function submitAnswers() {
+    if (!merchantId) return;
+    await saveInitAnswers(merchantId, answers);
+    setStep(STEPS.length - 1);
   }
 
   return (
-    <StepShell
-      title="Exclusivity — Merchant Onboarding"
-      subtitle={shop ? `Shop: ${shop}` : "Provide ?shop=myshop.myshopify.com"}
-    >
-      <ProgressPills steps={STEPS} index={step} />
+    <div className="min-h-screen bg-neutral-950 text-neutral-50 p-8">
+      <div className="max-w-3xl mx-auto space-y-6">
+        <h1 className="text-2xl font-semibold">
+          Exclusivity — Onboarding
+        </h1>
 
-      {step === 0 && (
-        <>
-          <p className="text-sm text-neutral-300">
-            This wizard initializes the Exclusivity engine. Customers never see
-            loyalty mechanics unless you expose them.
-          </p>
-          <ButtonRow
-            backLabel="Exit"
-            onBack={() => (window.location.href = "/")}
-            nextLabel="Verify Engine"
-            onNext={async () => (await verifyEngine()) && setStep(1)}
-            busy={busy}
-          />
-        </>
-      )}
+        <p className="text-sm text-neutral-400">
+          Step {step + 1} of {STEPS.length}: {STEPS[step]}
+        </p>
 
-      {step === 1 && (
-        <>
-          <pre className="text-xs bg-neutral-950 p-3 rounded-xl border border-neutral-800">
-            {JSON.stringify(status ?? { note: "No status yet" }, null, 2)}
-          </pre>
-          {error && <div className="text-sm text-red-400">{error}</div>}
-          <ButtonRow onBack={() => setStep(0)} onNext={() => setStep(2)} />
-        </>
-      )}
+        {error && (
+          <div className="rounded-md bg-red-950/50 border border-red-800 p-3 text-red-300">
+            {error}
+          </div>
+        )}
 
-      {step === 2 && (
-        <>
-          <p className="text-sm text-neutral-300">
-            Backfill runs automatically after install. This screen reflects any
-            available status.
-          </p>
-          <pre className="text-xs bg-neutral-950 p-3 rounded-xl border border-neutral-800">
-            {JSON.stringify(status ?? {}, null, 2)}
-          </pre>
-          <ButtonRow onBack={() => setStep(1)} onNext={() => setStep(3)} />
-        </>
-      )}
+        {questions.length > 0 && step < STEPS.length - 1 && (
+          <div className="space-y-4">
+            {questions.map((q) => (
+              <div key={q}>
+                <label className="block text-sm mb-1">{q}</label>
+                <input
+                  className="w-full rounded bg-neutral-900 border border-neutral-800 p-2"
+                  value={answers[q] || ""}
+                  onChange={(e) =>
+                    setAnswers((a) => ({ ...a, [q]: e.target.value }))
+                  }
+                />
+              </div>
+            ))}
+            <button
+              onClick={submitAnswers}
+              className="rounded bg-white text-black px-4 py-2"
+            >
+              Continue
+            </button>
+          </div>
+        )}
 
-      {step === 3 && (
-        <>
-          {questions.map((q) => (
-            <div key={q} className="border border-neutral-800 rounded-xl p-3">
-              <div className="text-sm">{q}</div>
-              <textarea
-                className="mt-2 w-full bg-neutral-900 border border-neutral-700 rounded-xl p-2 text-sm"
-                rows={3}
-                value={answers[q] || ""}
-                onChange={(e) =>
-                  setAnswers((a) => ({ ...a, [q]: e.target.value }))
-                }
-              />
-            </div>
-          ))}
-          <ButtonRow
-            onBack={() => setStep(2)}
-            nextLabel="Finish"
-            onNext={async () => (await saveDNA()) && setStep(4)}
-            nextDisabled={!merchantId}
-            busy={busy}
-          />
-        </>
-      )}
-
-      {step === 4 && (
-        <>
-          <p className="text-sm text-neutral-300">
-            Setup complete. Orion/Lyric can now generate briefings and guide
-            actions.
-          </p>
-          <ButtonRow
-            backLabel="Back"
-            nextLabel="Go to Dashboard"
-            onBack={() => setStep(3)}
-            onNext={() => (window.location.href = "/")}
-          />
-        </>
-      )}
-    </StepShell>
+        {step === STEPS.length - 1 && (
+          <div className="text-emerald-400">
+            Onboarding complete. Engine is active.
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
