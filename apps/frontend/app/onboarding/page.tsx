@@ -1,13 +1,7 @@
-// apps/frontend/app/onboarding/page.tsx
+// apps/frontend/app/onboarding/onboarding-client.tsx
 // =====================================================
-// Exclusivity — Onboarding (FINAL, TYPE-SAFE)
-// Phase: UI-05 / UI-06
-//
-// Guarantees:
-// - No unsafe union access
-// - No TS narrowing failures
-// - Deterministic merchant bootstrap
-// - One-way flow into dashboard
+// Exclusivity — Onboarding Client Logic
+// Client-only, Suspense-safe
 // =====================================================
 
 "use client";
@@ -36,9 +30,9 @@ type ResolveFailure = {
 
 type ResolveResult = ResolveSuccess | ResolveFailure;
 
-/* ---------- Page ---------- */
+/* ---------- Component ---------- */
 
-export default function OnboardingPage() {
+export default function OnboardingClient() {
   const params = useSearchParams();
   const router = useRouter();
   const shop = params.get("shop");
@@ -46,8 +40,6 @@ export default function OnboardingPage() {
   const [step, setStep] = useState(1);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  /* ---------- Guard ---------- */
 
   if (!shop) {
     return (
@@ -59,13 +51,11 @@ export default function OnboardingPage() {
     );
   }
 
-  /* ---------- Resolver ---------- */
-
   async function resolveMerchant(): Promise<ResolveResult> {
     try {
       const status = await getBrandStatusByShop(shop);
       if (!status.ok) {
-        return { ok: false, error: "Unable to check brand status", details: status };
+        return { ok: false, error: "Unable to check brand status" };
       }
 
       const profile = await getMerchantProfileByShop(shop);
@@ -79,7 +69,7 @@ export default function OnboardingPage() {
       );
 
       if (!ingest.ok || !ingest.data?.merchant_id) {
-        return { ok: false, error: "Merchant bootstrap failed", details: ingest };
+        return { ok: false, error: "Merchant bootstrap failed" };
       }
 
       return {
@@ -92,8 +82,6 @@ export default function OnboardingPage() {
     }
   }
 
-  /* ---------- Action ---------- */
-
   async function handleContinue() {
     setBusy(true);
     setError(null);
@@ -101,20 +89,15 @@ export default function OnboardingPage() {
     const result = await resolveMerchant();
 
     if (result.ok === false) {
-      // 🔒 Fully safe: error only read in failure branch
       setBusy(false);
       setError(result.error);
       return;
     }
 
-    // ✅ Success path
     setBusy(false);
     setStep(2);
-
     router.replace(`/dashboard?merchant_id=${result.merchant_id}`);
   }
-
-  /* ---------- Render ---------- */
 
   return (
     <div style={{ padding: 32, maxWidth: 640 }}>
