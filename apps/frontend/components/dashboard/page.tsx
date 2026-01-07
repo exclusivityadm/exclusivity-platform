@@ -5,18 +5,13 @@ import { Section } from "@/components/dashboard/Section";
 import { HealthBadge } from "@/components/dashboard/HealthBadge";
 import { MetricCard } from "@/components/dashboard/MetricCard";
 import { BriefingPanel } from "@/components/dashboard/BriefingPanel";
-import {
-  getSystemHealth,
-  getLoyaltyHealth,
-} from "@/lib/dashboardApi";
-import {
-  getLatestPricing,
-  getMintJobs,
-  getLatestInvoice,
-} from "@/lib/ui03Api";
 import { PricingPanel } from "@/components/dashboard/PricingPanel";
 import { MintActivityPanel } from "@/components/dashboard/MintActivityPanel";
 import { InvoicePanel } from "@/components/dashboard/InvoicePanel";
+import { ActionsPanel } from "@/components/dashboard/ActionsPanel";
+
+import { getSystemHealth, getLoyaltyHealth } from "@/lib/dashboardApi";
+import { getLatestPricing, getMintJobs, getLatestInvoice } from "@/lib/ui03Api";
 
 function param(name: string) {
   if (typeof window === "undefined") return "";
@@ -29,6 +24,7 @@ export default function DashboardPage() {
   const [sys, setSys] = useState<any | null>(null);
   const [loyalty, setLoyalty] = useState<any | null>(null);
   const [briefing, setBriefing] = useState<any | null>(null);
+
   const [pricing, setPricing] = useState<any | null>(null);
   const [jobs, setJobs] = useState<any[] | null>(null);
   const [invoice, setInvoice] = useState<any | null>(null);
@@ -40,9 +36,11 @@ export default function DashboardPage() {
 
   useEffect(() => {
     if (!merchant_id) return;
+
     import("@/lib/dashboardApi").then(({ getDailyBriefing }) => {
       getDailyBriefing(merchant_id).then((r: any) => r.ok && setBriefing(r.data));
     });
+
     getLatestPricing(merchant_id).then((r) => r.ok && setPricing(r.data));
     getMintJobs(merchant_id).then((r) => r.ok && setJobs(r.data));
     getLatestInvoice(merchant_id).then((r) => r.ok && setInvoice(r.data));
@@ -72,6 +70,21 @@ export default function DashboardPage() {
         <PricingPanel rec={pricing} />
         <MintActivityPanel jobs={jobs} />
         <InvoicePanel invoice={invoice} />
+
+        {merchant_id ? (
+          <ActionsPanel
+            merchant_id={merchant_id}
+            pricing={pricing}
+            jobs={jobs}
+            invoice={invoice}
+          />
+        ) : (
+          <Section title="Actions">
+            <div className="text-sm text-neutral-400">
+              Provide <code className="text-neutral-200">?merchant_id=...</code> to enable actions.
+            </div>
+          </Section>
+        )}
       </div>
     </div>
   );
