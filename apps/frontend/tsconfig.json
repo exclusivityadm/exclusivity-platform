@@ -17,9 +17,9 @@
 
     "incremental": true,
 
-    "baseUrl": "src",
+    "baseUrl": ".",              // 🔧 FIXED (was "src")
     "paths": {
-      "@/*": ["*"]
+      "@/*": ["./*"]             // 🔧 FIXED (was ["*"])
     },
 
     "plugins": [
