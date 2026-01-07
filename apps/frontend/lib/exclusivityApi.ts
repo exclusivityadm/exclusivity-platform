@@ -10,6 +10,25 @@ export type ApiResult<T> =
   | { ok: true; data: T }
   | { ok: false; error: string; status?: number; details?: any };
 
+/* =====================================================
+   Canonical response types
+   ===================================================== */
+
+export type MerchantProfile = {
+  merchant_id?: string;
+  id?: string;
+  shop_domain?: string;
+};
+
+export type BrandStatus = {
+  merchant_id?: string;
+  status?: string;
+};
+
+/* =====================================================
+   Backend config
+   ===================================================== */
+
 const BACKEND = (process.env.NEXT_PUBLIC_BACKEND_URL || "").replace(/\/$/, "");
 
 function mustBackend(): string {
@@ -25,6 +44,10 @@ async function safeJson(res: Response) {
     return txt;
   }
 }
+
+/* =====================================================
+   HTTP helpers
+   ===================================================== */
 
 export async function apiGet<T>(path: string): Promise<ApiResult<T>> {
   try {
@@ -62,18 +85,27 @@ export async function apiPost<T>(path: string, body: any): Promise<ApiResult<T>>
   }
 }
 
-/* ---- Canonical endpoints used by onboarding ---- */
+/* =====================================================
+   Canonical API endpoints (typed)
+   ===================================================== */
 
 export const getInitQuestions = () =>
   apiGet<{ questions: string[] }>("/ai/init-questions");
 
-export const saveInitAnswers = (merchant_id: string, answers: Record<string, string>) =>
+export const saveInitAnswers = (
+  merchant_id: string,
+  answers: Record<string, string>
+) =>
   apiPost("/ai/init-answers", { merchant_id, answers });
 
 export const getMerchantProfileByShop = (shop_domain: string) =>
-  apiGet(`/merchant/profile?shop_domain=${encodeURIComponent(shop_domain)}`);
+  apiGet<MerchantProfile>(
+    `/merchant/profile?shop_domain=${encodeURIComponent(shop_domain)}`
+  );
 
 export const getBrandStatusByShop = (shop_domain: string) =>
-  apiGet(`/brand/status?shop_domain=${encodeURIComponent(shop_domain)}`);
+  apiGet<BrandStatus>(
+    `/brand/status?shop_domain=${encodeURIComponent(shop_domain)}`
+  );
 
 export const getDebugRoutes = () => apiGet("/debug/routes");
