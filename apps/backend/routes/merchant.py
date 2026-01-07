@@ -2,96 +2,45 @@
 # =====================================================
 # Exclusivity Backend — Merchant Routes (Canonical)
 #
-# Canonical Rules:
-# - merchant_id (UUID) is the ONLY internal identifier
-# - shop_domain is an external resolver key
-# - /merchant/resolve is the single source of truth
-# - /merchant/profile assumes existence
+# Routes:
+#   GET /merchant/profile?shop_domain=...
+#   GET /merchant/resolve?shop=...        (alias for onboarding convenience)
+#   GET /merchant/settings?merchant_id=...
+#   GET /merchant/tiers?merchant_id=...
+#
+# Notes:
+# - Keep /profile response shape stable for the frontend.
+# - /resolve exists because onboarding commonly passes "shop=...".
 # =====================================================
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query
-from typing import Optional
-import time
-
+from fastapi import APIRouter, HTTPException
 from apps.backend.routes.services.supabase_admin import (
     SupabaseAdminError,
     select_one,
-    upsert_one,
-    new_uuid,
 )
 
 router = APIRouter(tags=["merchant"])  # prefix owned by main.py
 
-# -----------------------------------------------------
-# CANONICAL RESOLVER — CREATE OR RETURN
-# -----------------------------------------------------
+
 @router.get("/resolve")
-def resolve_merchant(
-    shop_domain: str = Query(..., description="Shopify shop domain"),
-):
+def merchant_resolve(shop: str):
     """
-    Canonical merchant identity resolver.
-
-    Guarantees:
-    - Always returns { ok, merchant_id, created }
-    - Never 404s
-    - Safe to call repeatedly
+    Alias for onboarding: accepts `shop` and maps it to /profile.
     """
+    shop_domain = (shop or "").strip().lower()
+    if not shop_domain:
+        raise HTTPException(400, "Missing shop")
 
-    shop = (shop_domain or "").strip().lower()
-    if not shop:
-        return {"ok": False, "error": "Missing shop_domain"}
-
-    try:
-        existing = select_one(
-            "merchants",
-            {"shop_domain": shop},
-            columns="merchant_id",
-        )
-
-        if existing and existing.get("merchant_id"):
-            return {
-                "ok": True,
-                "merchant_id": existing["merchant_id"],
-                "created": False,
-            }
-
-        merchant_id = new_uuid()
-        now = int(time.time())
-
-        upsert_one(
-            table="merchants",
-            conflict_cols="shop_domain",
-            row={
-                "merchant_id": merchant_id,
-                "shop_domain": shop,
-                "installed": False,
-                "created_at": now,
-                "updated_at": now,
-            },
-        )
-
-        return {
-            "ok": True,
-            "merchant_id": merchant_id,
-            "created": True,
-        }
-
-    except SupabaseAdminError as e:
-        return {"ok": False, "error": str(e)}
-    except Exception as e:
-        return {"ok": False, "error": f"merchant/resolve error: {e}"}
+    return merchant_profile(shop_domain=shop_domain)
 
 
-# -----------------------------------------------------
-# PROFILE — ASSUMES MERCHANT EXISTS
-# -----------------------------------------------------
 @router.get("/profile")
 def merchant_profile(shop_domain: str):
     """
-    Fetch merchant profile AFTER resolution.
+    Resolve canonical merchant identity by shop domain.
+    Returns merchant_id (Exclusivity UUID) as the primary key.
     """
     shop_domain = (shop_domain or "").strip().lower()
     if not shop_domain:
@@ -104,13 +53,14 @@ def merchant_profile(shop_domain: str):
             columns="merchant_id,shop_domain,installed,created_at,updated_at",
         )
         if not m:
-            raise HTTPException(404, "Merchant not found")
+            # Frontend treats this as "not yet installed"
+            raise HTTPException(404, "Merchant not found for shop_domain")
 
         return {
             "ok": True,
-            "merchant_id": m["merchant_id"],
-            "shop_domain": m["shop_domain"],
-            "installed": bool(m.get("installed", True)),
+            "merchant_id": m.get("merchant_id"),
+            "shop_domain": m.get("shop_domain"),
+            "installed": bool(m.get("installed")) if m.get("installed") is not None else True,
             "created_at": m.get("created_at"),
             "updated_at": m.get("updated_at"),
         }
@@ -123,9 +73,6 @@ def merchant_profile(shop_domain: str):
         raise HTTPException(500, f"merchant/profile error: {e}")
 
 
-# -----------------------------------------------------
-# SETTINGS (STABLE STUB)
-# -----------------------------------------------------
 @router.get("/settings")
 def merchant_settings(merchant_id: str):
     if not merchant_id:
@@ -133,9 +80,6 @@ def merchant_settings(merchant_id: str):
     return {"ok": True, "merchant_id": merchant_id, "settings": {}}
 
 
-# -----------------------------------------------------
-# TIERS (STABLE STUB)
-# -----------------------------------------------------
 @router.get("/tiers")
 def merchant_tiers(merchant_id: str):
     if not merchant_id:
