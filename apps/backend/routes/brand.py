@@ -1,45 +1,114 @@
+# apps/backend/routes/brand.py
+# =====================================================
+# Exclusivity Backend — Brand Routes (Canonical)
+#
+# Routes:
+#   GET  /brand/status?shop_domain=...
+#   POST /brand/ingest                -> bootstrap merchant identity (UUID-first)
+#
+# Notes:
+# - Canonical identity is Exclusivity UUID (merchant_id).
+# - shop_domain is integration metadata only.
+# - This file is intentionally engine-first and minimal.
+# =====================================================
+
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+from typing import Optional, Dict, Any
+from datetime import datetime, timezone
 
-from apps.backend.db import get_supabase
+from apps.backend.routes.services.supabase_admin import (
+    SupabaseAdminError,
+    select_one,
+    upsert_one,
+    new_uuid,
+)
 
-router = APIRouter(tags=["brand"])
+router = APIRouter(tags=["brand"])  # prefix owned by main.py
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+class BrandIngestIn(BaseModel):
+    shop_domain: str
 
 
 @router.get("/status")
-async def brand_status(merchant_id: str):
-    sb = get_supabase()
-    if not sb:
-        raise HTTPException(500, "Supabase not configured")
+def brand_status(shop_domain: str):
+    """
+    Returns install/bootstrap visibility for a given shop_domain.
+    This is used by frontend install/onboarding gating.
+    """
+    try:
+        m = select_one("merchants", {"shop_domain": shop_domain}, columns="merchant_id,shop_domain,created_at,updated_at")
+        if not m:
+            return {
+                "ok": True,
+                "shop_domain": shop_domain,
+                "installed": False,
+                "merchant_id": None,
+                "backfill_state": "not_started",
+            }
 
-    r = sb.table("merchant_brand").select("*").eq("merchant_id", merchant_id).limit(1).execute()
-    if not r.data:
-        return JSONResponse(content={"ok": True, "merchant_id": merchant_id, "exists": False})
-
-    row = r.data[0]
-    return JSONResponse(content={
-        "ok": True,
-        "merchant_id": merchant_id,
-        "exists": True,
-        "shop_domain": row.get("shop_domain"),
-        "brand_name": row.get("brand_name"),
-        "primary_color": row.get("primary_color"),
-        "secondary_color": row.get("secondary_color"),
-        "font_family": row.get("font_family"),
-        "program_name": row.get("program_name"),
-        "unit_name_singular": row.get("unit_name_singular"),
-        "unit_name_plural": row.get("unit_name_plural"),
-        "onboarding_completed": row.get("onboarding_completed"),
-    })
+        return {
+            "ok": True,
+            "shop_domain": m.get("shop_domain"),
+            "installed": True,
+            "merchant_id": m.get("merchant_id"),
+            # Backfill state will be hardened later (UI-07/08). For now stable.
+            "backfill_state": "unknown",
+        }
+    except SupabaseAdminError as e:
+        raise HTTPException(500, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"brand/status error: {e}")
 
 
 @router.post("/ingest")
-async def brand_ingest(merchant_id: str, background: BackgroundTasks):
+def brand_ingest(payload: BrandIngestIn):
+    """
+    Bootstrap endpoint: guarantees a merchant exists for this shop_domain and returns merchant_id.
+    Idempotent by shop_domain.
+    """
+    shop_domain = (payload.shop_domain or "").strip().lower()
+    if not shop_domain:
+        raise HTTPException(400, "Missing shop_domain")
+
     try:
-        from apps.backend.services.shopify_brand_ingest import ingest_brand  # type: ignore
-        background.add_task(ingest_brand, merchant_id)
-        return {"ok": True, "merchant_id": merchant_id, "message": "Brand ingestion queued."}
+        existing = select_one("merchants", {"shop_domain": shop_domain}, columns="merchant_id,shop_domain")
+        if existing and existing.get("merchant_id"):
+            return {
+                "ok": True,
+                "created": False,
+                "shop_domain": shop_domain,
+                "merchant_id": existing.get("merchant_id"),
+            }
+
+        merchant_id = new_uuid()
+        row: Dict[str, Any] = {
+            "merchant_id": merchant_id,
+            "shop_domain": shop_domain,
+            "installed": True,
+            "created_at": _now_iso(),
+            "updated_at": _now_iso(),
+        }
+
+        # Upsert guarantees idempotency by shop_domain
+        out = upsert_one("merchants", row, conflict_cols="shop_domain")
+        mid = out.get("merchant_id") or merchant_id
+
+        return {
+            "ok": True,
+            "created": True,
+            "shop_domain": shop_domain,
+            "merchant_id": mid,
+        }
+
+    except SupabaseAdminError as e:
+        raise HTTPException(500, str(e))
     except Exception as e:
-        raise HTTPException(500, f"Brand ingestion service not available: {e}")
+        raise HTTPException(500, f"brand/ingest error: {e}")
