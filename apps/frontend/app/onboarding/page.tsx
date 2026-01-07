@@ -1,24 +1,26 @@
 // apps/frontend/app/onboarding/page.tsx
 // =====================================================
-// Exclusivity — Onboarding (Canonical, Type-Safe)
-// Phase: UI-05 / UI-06 Bridge
+// Exclusivity — Onboarding (FINAL, TYPE-SAFE)
+// Phase: UI-05 / UI-06
 //
 // Guarantees:
-// - shop param required
-// - merchant identity bootstrapped deterministically
-// - no unsafe property access
-// - no TypeScript narrowing failures
+// - No unsafe union access
+// - No TS narrowing failures
+// - Deterministic merchant bootstrap
+// - One-way flow into dashboard
 // =====================================================
 
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import {
   getBrandStatusByShop,
   getMerchantProfileByShop,
   apiPost,
 } from "@/lib/exclusivityApi";
+
+/* ---------- Types ---------- */
 
 type ResolveSuccess = {
   ok: true;
@@ -34,20 +36,19 @@ type ResolveFailure = {
 
 type ResolveResult = ResolveSuccess | ResolveFailure;
 
+/* ---------- Page ---------- */
+
 export default function OnboardingPage() {
   const params = useSearchParams();
   const router = useRouter();
-
   const shop = params.get("shop");
 
-  const [step, setStep] = useState<number>(1);
-  const [busy, setBusy] = useState<boolean>(false);
+  const [step, setStep] = useState(1);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [merchantId, setMerchantId] = useState<string | null>(null);
 
-  // --------------------------------------------------
-  // Guard: shop param
-  // --------------------------------------------------
+  /* ---------- Guard ---------- */
+
   if (!shop) {
     return (
       <div style={{ padding: 32 }}>
@@ -58,24 +59,20 @@ export default function OnboardingPage() {
     );
   }
 
-  // --------------------------------------------------
-  // Resolve / Bootstrap merchant
-  // --------------------------------------------------
+  /* ---------- Resolver ---------- */
+
   async function resolveMerchant(): Promise<ResolveResult> {
     try {
-      // 1) Check status
       const status = await getBrandStatusByShop(shop);
       if (!status.ok) {
         return { ok: false, error: "Unable to check brand status", details: status };
       }
 
-      // 2) Attempt profile resolution
       const profile = await getMerchantProfileByShop(shop);
       if (profile.ok && profile.data?.merchant_id) {
         return { ok: true, merchant_id: profile.data.merchant_id };
       }
 
-      // 3) Bootstrap merchant
       const ingest = await apiPost<{ merchant_id: string; created?: boolean }>(
         "/brand/ingest",
         { shop_domain: shop }
@@ -88,40 +85,37 @@ export default function OnboardingPage() {
       return {
         ok: true,
         merchant_id: ingest.data.merchant_id,
-        created: Boolean(ingest.data.created),
+        created: ingest.data.created,
       };
     } catch (e: any) {
       return { ok: false, error: e?.message || "Unexpected error" };
     }
   }
 
-  // --------------------------------------------------
-  // Continue handler
-  // --------------------------------------------------
+  /* ---------- Action ---------- */
+
   async function handleContinue() {
     setBusy(true);
     setError(null);
 
     const result = await resolveMerchant();
 
-    if (!result.ok) {
+    if (result.ok === false) {
+      // 🔒 Fully safe: error only read in failure branch
       setBusy(false);
       setError(result.error);
       return;
     }
 
-    // ✅ Fully type-safe here
-    setMerchantId(result.merchant_id);
+    // ✅ Success path
     setBusy(false);
     setStep(2);
 
-    // Temporary redirect straight to dashboard
     router.replace(`/dashboard?merchant_id=${result.merchant_id}`);
   }
 
-  // --------------------------------------------------
-  // Render
-  // --------------------------------------------------
+  /* ---------- Render ---------- */
+
   return (
     <div style={{ padding: 32, maxWidth: 640 }}>
       <h1>Exclusivity — Onboarding</h1>
@@ -129,21 +123,13 @@ export default function OnboardingPage() {
 
       {error && <p style={{ color: "crimson" }}>{error}</p>}
 
-      {!merchantId && (
-        <button
-          onClick={handleContinue}
-          disabled={busy}
-          style={{ padding: "10px 16px", marginTop: 16 }}
-        >
-          {busy ? "Initializing…" : "Continue"}
-        </button>
-      )}
-
-      {merchantId && (
-        <p style={{ color: "green" }}>
-          Merchant resolved: {merchantId}
-        </p>
-      )}
+      <button
+        onClick={handleContinue}
+        disabled={busy}
+        style={{ padding: "10px 16px", marginTop: 16 }}
+      >
+        {busy ? "Initializing…" : "Continue"}
+      </button>
     </div>
   );
 }
