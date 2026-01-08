@@ -1,80 +1,108 @@
 # apps/backend/services/action_ledger.py
+# =====================================================
+# Action Ledger (Canonical)
+#
+# RULES (LOCKED):
+# - Ledger ALL actions:
+#     • preview
+#     • execute
+#     • denied / blocked
+# - Service-role only writes
+# - Best-effort: never break execution flow
+# =====================================================
+
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
-import uuid
+import os
+import json
 import time
+from typing import Any, Dict, Optional
 
-from apps.backend.routes.services.supabase_admin import (
-    SupabaseAdminError,
-    insert_one,
-    update_one,
-    select_one,
-)
+import requests
 
 
-def now_ms() -> int:
-    return int(time.time() * 1000)
+# -----------------------------------------------------
+# Env helpers
+# -----------------------------------------------------
+
+def _env(name: str, default: str = "") -> str:
+    return (os.getenv(name, default) or "").strip()
+
+def _must_env(name: str) -> str:
+    v = _env(name)
+    if not v:
+        raise RuntimeError(f"Missing env var: {name}")
+    return v
 
 
-def create_preview(
-    *,
-    merchant_id: str,
-    request_id: str,
-    action_type: str,
-    input_payload: Dict[str, Any],
-    cost_estimate: Dict[str, Any] | None = None,
-) -> Dict[str, Any]:
-    preview_id = str(uuid.uuid4())
+# -----------------------------------------------------
+# Supabase (service role)
+# -----------------------------------------------------
 
-    row = {
-        "preview_id": preview_id,
-        "merchant_id": merchant_id,
-        "request_id": request_id,
-        "action_type": action_type,
-        "input": input_payload,
-        "cost_estimate": cost_estimate or {},
-        "status": "PREVIEW",
-        "created_at_ms": now_ms(),
+def _sb_headers() -> Dict[str, str]:
+    key = _must_env("SUPABASE_SERVICE_ROLE_KEY")
+    return {
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
     }
 
-    insert_one("action_previews", row)
-    return row
+def _sb_url(path: str) -> str:
+    return _must_env("SUPABASE_URL").rstrip("/") + path
 
 
-def mark_preview_executed(preview_id: str, execution_id: str) -> None:
-    update_one("action_previews", {"preview_id": preview_id}, {"status": "EXECUTED", "execution_id": execution_id})
+# -----------------------------------------------------
+# Public API
+# -----------------------------------------------------
 
-
-def write_ledger_event(
+def write_action_ledger(
     *,
     merchant_id: str,
-    request_id: str,
-    actor_type: str,
-    actor_id: str | None,
-    action_type: str,
-    phase: str,  # PREVIEW | EXECUTE | RESULT | ERROR
-    preview_id: str | None = None,
-    execution_id: str | None = None,
-    payload: Dict[str, Any] | None = None,
-) -> str:
-    event_id = str(uuid.uuid4())
-    row = {
-        "event_id": event_id,
-        "merchant_id": merchant_id,
-        "request_id": request_id,
-        "actor_type": actor_type,
-        "actor_id": actor_id,
-        "action_type": action_type,
-        "phase": phase,
-        "preview_id": preview_id,
-        "execution_id": execution_id,
-        "payload": payload or {},
-        "created_at_ms": now_ms(),
-    }
-    insert_one("action_ledger", row)
-    return event_id
+    mode: str,                 # "preview" | "execute"
+    plan: str,
+    allowed: bool,
+    action: Dict[str, Any],
+    persona: Optional[str] = None,
+    request_id: Optional[str] = None,
+    reason: Optional[str] = None,
+    result: Optional[Dict[str, Any]] = None,
+) -> None:
+    """
+    Best-effort ledger write.
+    This MUST NEVER throw upstream.
+    """
+    try:
+        row = {
+            "merchant_id": merchant_id,
+            "mode": mode,
+            "plan": plan,
+            "allowed": bool(allowed),
+            "persona": persona,
+            "request_id": request_id,
+            "reason": reason,
+            "action": action,
+            "result": result,
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
 
+        headers = _sb_headers()
+        headers["Prefer"] = "return=minimal"
 
-def get_preview(preview_id: str) -> Dict[str, Any] | None:
-    return select_one("action_previews", {"preview_id": preview_id}, columns="*")
+        r = requests.post(
+            _sb_url("/rest/v1/action_ledger"),
+            headers=headers,
+            data=json.dumps(row),
+            timeout=30,
+        )
+
+        # Ignore duplicates / conflicts silently
+        if r.status_code >= 400:
+            txt = (r.text or "").lower()
+            if "duplicate" in txt or "unique" in txt:
+                return
+            return
+
+    except Exception:
+        # Ledger failures must NEVER block execution
+        return
