@@ -1,239 +1,139 @@
 # apps/backend/routes/shopify_oauth.py
 # =====================================================
-# Exclusivity Backend — Shopify OAuth Routes (Canonical)
+# Shopify OAuth Routes (Canonical Drop B)
 #
-# Mounted by main.py under prefix "/shopify"
+# Mounted under /shopify by main.py
 #
-# Routes:
-#   GET /shopify/install?shop=...
-#   GET /shopify/callback?... (Shopify redirect)
-#   GET /shopify/status?shop=...
+#   GET  /shopify/auth?shop=...
+#   GET  /shopify/callback?shop=...&code=...&hmac=...&state=...&timestamp=...
 #
-# Stores:
-# - merchants.shop_domain (key)
-# - merchants.merchant_id (uuid) returned by DB
-# - shopify_tokens (recommended) or merchants.shopify_access_token (fallback)
+# Behavior:
+# - Redirects merchant to Shopify install url
+# - Validates callback HMAC + state
+# - Exchanges token
+# - Upserts merchant + token row in Supabase using service_role
+# - Marks merchant installed=true
 # =====================================================
 
 from __future__ import annotations
 
 import os
-import time
-from fastapi import APIRouter, Request
+import secrets
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse, JSONResponse
+from typing import Any, Dict
 
-from apps.backend.services.supabase_admin_client import SupabaseAdminClient
-from apps.backend.services.shopify.hmac import verify_shopify_hmac
-from apps.backend.services.shopify.oauth import (
-    make_state,
-    verify_state,
+from apps.backend.routes.services.shopify_crypto import (
     normalize_shop,
-    build_authorize_url,
-    exchange_code_for_token,
+    verify_hmac,
+    build_state,
+    parse_state,
+)
+from apps.backend.routes.services.shopify_client import (
+    build_install_url,
+    exchange_access_token,
+    register_webhook,
+    ShopifyClientError,
+)
+from apps.backend.routes.services.supabase_service import (
+    upsert,
+    select_one,
+    SupabaseServiceError,
 )
 
-router = APIRouter(tags=["shopify"])
+router = APIRouter(tags=["shopify"])  # prefix owned by main.py
 
 
-def ok(data):
-    return JSONResponse({"ok": True, "data": data})
+def _backend_public_url() -> str:
+    # used for webhook addresses
+    v = (os.getenv("SHOPIFY_APP_URL") or "").strip().rstrip("/")
+    if not v:
+        raise HTTPException(500, "Missing SHOPIFY_APP_URL")
+    return v
 
 
-def err(message: str, details=None, status_code: int = 400):
-    payload = {"ok": False, "error": message}
-    if details is not None:
-        payload["details"] = details
-    return JSONResponse(payload, status_code=status_code)
+@router.get("/auth")
+def shopify_auth(shop: str):
+    shop = normalize_shop(shop)
+    if not shop:
+        raise HTTPException(400, "Missing shop")
 
+    nonce = secrets.token_urlsafe(16)
+    state = build_state(shop, nonce)
 
-def _env(name: str, default: str = "") -> str:
-    return (os.getenv(name, default) or "").strip()
-
-
-def _frontend_redirect(base: str, path: str, query: str = "") -> RedirectResponse:
-    base = (base or "").rstrip("/")
-    path = "/" + (path or "").lstrip("/")
-    url = f"{base}{path}"
-    if query:
-        url = f"{url}?{query.lstrip('?')}"
-    return RedirectResponse(url=url, status_code=302)
-
-
-@router.get("/install")
-def install(shop: str):
-    """
-    Starts OAuth.
-    """
-    api_key = _env("SHOPIFY_API_KEY")
-    api_secret = _env("SHOPIFY_API_SECRET")
-    scopes = _env("SHOPIFY_SCOPES", "read_products,read_customers,read_orders")
-    app_url = _env("SHOPIFY_APP_URL")  # backend public base, e.g. https://exclusivity-backend.onrender.com
-    redirect_path = _env("SHOPIFY_REDIRECT_PATH", "/shopify/callback")
-
-    if not api_key or not api_secret or not app_url:
-        return err("Missing Shopify env vars", {"required": ["SHOPIFY_API_KEY", "SHOPIFY_API_SECRET", "SHOPIFY_APP_URL"]}, 500)
-
-    shop_norm = normalize_shop(shop)
-    if not shop_norm:
-        return err("Missing shop parameter")
-
-    redirect_uri = f"{app_url.rstrip('/')}{redirect_path}"
-    state = make_state(shop_norm, api_secret, ttl_seconds=900)
-
-    auth_url = build_authorize_url(
-        shop=shop_norm,
-        api_key=api_key,
-        scopes=scopes,
-        redirect_uri=redirect_uri,
-        state=state,
-    )
-    return RedirectResponse(url=auth_url, status_code=302)
+    install_url = build_install_url(shop, state)
+    return RedirectResponse(url=install_url, status_code=302)
 
 
 @router.get("/callback")
-def callback(request: Request):
-    """
-    OAuth callback from Shopify.
-    Validates:
-    - Shopify hmac
-    - signed state
-    Exchanges code -> access_token
-    Stores merchant + token
-    Redirects to frontend onboarding.
-    """
-    api_key = _env("SHOPIFY_API_KEY")
-    api_secret = _env("SHOPIFY_API_SECRET")
-    frontend_url = _env("FRONTEND_APP_URL")  # e.g. https://exclusivity-platform.vercel.app
-
+async def shopify_callback(request: Request):
     q = dict(request.query_params)
-
-    # 1) verify HMAC
-    if not api_secret or not verify_shopify_hmac(q, api_secret):
-        return err("Invalid Shopify HMAC", {"query": q}, 400)
 
     shop = normalize_shop(q.get("shop", ""))
     code = (q.get("code") or "").strip()
     state = (q.get("state") or "").strip()
 
-    if not shop or not code or not state:
-        return err("Missing required callback parameters", {"shop": shop, "has_code": bool(code), "has_state": bool(state)}, 400)
+    if not shop:
+        raise HTTPException(400, "Missing shop")
+    if not code:
+        raise HTTPException(400, "Missing code")
+    if not state:
+        raise HTTPException(400, "Missing state")
 
-    # 2) verify state
-    st_ok, st_payload, st_err = verify_state(state, api_secret)
-    if not st_ok:
-        return err("Invalid state", {"reason": st_err}, 400)
+    secret = (os.getenv("SHOPIFY_API_SECRET") or "").strip()
+    if not verify_hmac(q, secret):
+        raise HTTPException(401, "Invalid HMAC")
 
-    if normalize_shop(st_payload.get("shop", "")) != shop:
-        return err("State/shop mismatch", {"state_shop": st_payload.get("shop"), "shop": shop}, 400)
+    parsed = parse_state(state)
+    if not parsed or normalize_shop(parsed.get("shop", "")) != shop:
+        raise HTTPException(401, "Invalid state")
 
-    # 3) exchange token
     try:
-        access_token = exchange_code_for_token(shop=shop, api_key=api_key, api_secret=api_secret, code=code)
-    except Exception as e:
-        return err("Token exchange failed", {"exception": str(e)}, 500)
+        tok = exchange_access_token(shop, code)
+        access_token = (tok.get("access_token") or "").strip()
+        scope = (tok.get("scope") or "").strip()
+        if not access_token:
+            raise HTTPException(500, "Token exchange returned no access_token")
 
-    # 4) persist to Supabase
-    try:
-        sb = SupabaseAdminClient()
+        # Upsert merchant
+        merchant = select_one("merchants", {"shop_domain": shop}, columns="merchant_id,shop_domain,installed")
+        if merchant and merchant.get("merchant_id"):
+            merchant_id = merchant["merchant_id"]
+        else:
+            created = upsert("merchants", {"shop_domain": shop, "installed": True}, on_conflict="shop_domain")
+            merchant_id = created.get("merchant_id")
+            if not merchant_id:
+                # safety fallback
+                merchant = select_one("merchants", {"shop_domain": shop}, columns="merchant_id")
+                merchant_id = merchant["merchant_id"] if merchant else None
 
-        # Upsert merchant by shop_domain. Assumes merchants table has unique shop_domain.
-        merchant_row = sb.upsert(
-            "merchants",
-            {
-                "shop_domain": shop,
-                "installed": True,
-                "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            },
-            on_conflict="shop_domain",
+        if not merchant_id:
+            raise HTTPException(500, "Unable to resolve merchant_id after upsert")
+
+        # Mark installed + store token (service-role only)
+        upsert("merchants", {"merchant_id": merchant_id, "shop_domain": shop, "installed": True}, on_conflict="shop_domain")
+        upsert(
+            "shopify_tokens",
+            {"merchant_id": merchant_id, "shop_domain": shop, "access_token": access_token, "scope": scope},
+            on_conflict="merchant_id",
         )
 
-        merchant_id = merchant_row.get("merchant_id")
+        # Day-One webhooks (register now)
+        base = _backend_public_url()
+        # You can expand topics later; these are safe "Day One" essentials
+        register_webhook(shop, access_token, "app/uninstalled", f"{base}/shopify/webhooks/app_uninstalled")
+        register_webhook(shop, access_token, "customers/create", f"{base}/shopify/webhooks/customers_create")
+        register_webhook(shop, access_token, "orders/create", f"{base}/shopify/webhooks/orders_create")
 
-        # Prefer separate shopify_tokens table if present. If it doesn't exist, fall back to merchants column.
-        try:
-            if merchant_id:
-                sb.upsert(
-                    "shopify_tokens",
-                    {
-                        "merchant_id": merchant_id,
-                        "shop_domain": shop,
-                        "access_token": access_token,
-                        "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                    },
-                    on_conflict="merchant_id",
-                )
-            else:
-                # Fallback: key by shop_domain if DB returns no merchant_id for some reason
-                sb.upsert(
-                    "shopify_tokens",
-                    {
-                        "shop_domain": shop,
-                        "access_token": access_token,
-                        "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                    },
-                    on_conflict="shop_domain",
-                )
-        except Exception:
-            # fallback to merchants.shopify_access_token if shopify_tokens doesn't exist
-            sb.upsert(
-                "merchants",
-                {
-                    "shop_domain": shop,
-                    "shopify_access_token": access_token,
-                    "installed": True,
-                    "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                },
-                on_conflict="shop_domain",
-            )
+        # Redirect into your Vercel onboarding route
+        # (frontend will call backend /merchant/profile?shop_domain=... to resolve merchant_id)
+        return RedirectResponse(url=f"/onboarding?shop={shop}", status_code=302)
 
+    except ShopifyClientError as e:
+        raise HTTPException(500, f"shopify oauth error: {e}")
+    except SupabaseServiceError as e:
+        raise HTTPException(500, f"supabase error: {e}")
+    except HTTPException:
+        raise
     except Exception as e:
-        return err("Failed to persist OAuth result", {"exception": str(e)}, 500)
-
-    # 5) redirect back to frontend onboarding with shop
-    if not frontend_url:
-        # If frontend URL is not set, return JSON so you can see it in browser.
-        return ok({"shop": shop, "merchant_id": merchant_id, "note": "Set FRONTEND_APP_URL to enable redirect."})
-
-    # Onboarding expects shop in query string
-    return _frontend_redirect(frontend_url, "/onboarding", f"shop={shop}")
-
-
-@router.get("/status")
-def status(shop: str):
-    """
-    Quick check: do we have a stored token for this shop?
-    """
-    shop_norm = normalize_shop(shop)
-    if not shop_norm:
-        return err("Missing shop")
-
-    try:
-        sb = SupabaseAdminClient()
-        m = sb.select_one("merchants", {"shop_domain": shop_norm}, columns="merchant_id,shop_domain,installed,created_at,updated_at")
-        if not m:
-            return ok({"shop": shop_norm, "installed": False, "merchant_id": None, "token_present": False})
-
-        merchant_id = m.get("merchant_id")
-
-        token_present = False
-        try:
-            t = None
-            if merchant_id:
-                t = sb.select_one("shopify_tokens", {"merchant_id": merchant_id}, columns="merchant_id")
-            if not t:
-                t = sb.select_one("shopify_tokens", {"shop_domain": shop_norm}, columns="shop_domain")
-            token_present = bool(t)
-        except Exception:
-            # fallback: merchants.shopify_access_token
-            token_present = bool(m.get("shopify_access_token"))
-
-        return ok(
-            {
-                "shop": shop_norm,
-                "installed": bool(m.get("installed")) if m.get("installed") is not None else True,
-                "merchant_id": merchant_id,
-                "token_present": token_present,
-            }
-        )
-    except Exception as e:
-        return err("Status failed", {"exception": str(e)}, 500)
+        raise HTTPException(500, f"shopify/callback unexpected: {e}")
