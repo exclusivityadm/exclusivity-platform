@@ -8,6 +8,7 @@ import logging
 import time
 
 from apps.backend.services.admin.logger import log_request_response
+from apps.backend.middleware.request_context import request_context_middleware
 
 log = logging.getLogger("uvicorn")
 
@@ -31,14 +32,23 @@ app.add_middleware(
 )
 
 # ----------------------------------------------------------
-# ADMIN LOGGING MIDDLEWARE
+# MIDDLEWARES (CANONICAL ORDER)
 # ----------------------------------------------------------
+
+# Context + identity (Drop C)
+@app.middleware("http")
+async def ctx_mw(request: Request, call_next):
+    return await request_context_middleware(request, call_next)
+
+
+# Admin logging
 @app.middleware("http")
 async def admin_logger_middleware(request: Request, call_next):
     start = time.time()
     response: Response = await call_next(request)
     await log_request_response(request, response, start)
     return response
+
 
 # ----------------------------------------------------------
 # HEALTH
@@ -47,11 +57,13 @@ async def admin_logger_middleware(request: Request, call_next):
 def health():
     return {"ok": True}
 
+
 # ----------------------------------------------------------
 # FEATURE FLAGS
 # ----------------------------------------------------------
 def enabled(name: str, default: str = "true") -> bool:
     return (os.getenv(name, default) or "").lower() == "true"
+
 
 # ----------------------------------------------------------
 # ROUTER LOADER
@@ -72,12 +84,14 @@ def include_router_if_exists(
         log.info(f"[ROUTER] Skip {module_path} ({e})")
         return False
 
+
 # ----------------------------------------------------------
 # ROOT
 # ----------------------------------------------------------
 @app.get("/")
 def root():
     return {"status": "running"}
+
 
 # ----------------------------------------------------------
 # ROUTES — CANONICAL ORDER (PREFIXES OWNED BY MAIN)
@@ -96,6 +110,9 @@ include_router_if_exists("apps.backend.routes.voice", prefix="/voice", tags=["vo
 include_router_if_exists("apps.backend.routes.brand", prefix="/brand", tags=["brand"])
 include_router_if_exists("apps.backend.routes.pricing", prefix="/pricing", tags=["pricing"])
 
+# Drop C — action execution spine (Preview/Execute + Ledger)
+include_router_if_exists("apps.backend.routes.actions", prefix="/actions", tags=["actions"])
+
 # AI
 if enabled("FEATURE_AI_BRAND_BRAIN", "true"):
     include_router_if_exists("apps.backend.routes.ai", prefix="/ai", tags=["ai"])
@@ -105,18 +122,11 @@ if enabled("FEATURE_LOYALTY", "true"):
     include_router_if_exists("apps.backend.routes.loyalty", prefix="/loyalty", tags=["loyalty"])
     include_router_if_exists("apps.backend.routes.merchant", prefix="/merchant", tags=["merchant"])
 
-# Actions (STEP 22 — REQUIRED)
-include_router_if_exists("apps.backend.routes.actions", prefix="/actions", tags=["actions"])
-
-# Shopify
+# Shopify (canonical: mount both routers under /shopify)
 if enabled("FEATURE_SHOPIFY_EMBED", "true"):
     include_router_if_exists("apps.backend.routes.shopify", prefix="/shopify", tags=["shopify"])
     include_router_if_exists("apps.backend.routes.shopify_oauth", prefix="/shopify", tags=["shopify"])
-    include_router_if_exists(
-        "apps.backend.routes.shopify_backfill_worker",
-        prefix="",
-        tags=["shopify-backfill-worker"],
-    )
+    include_router_if_exists("apps.backend.routes.shopify_backfill_worker", prefix="", tags=["shopify-backfill-worker"])
 
 # ----------------------------------------------------------
 # DEBUG
@@ -127,6 +137,7 @@ def debug_routes():
         {"path": r.path, "name": r.name, "methods": list(r.methods or [])}
         for r in app.router.routes
     ]
+
 
 # ----------------------------------------------------------
 # MAIN
