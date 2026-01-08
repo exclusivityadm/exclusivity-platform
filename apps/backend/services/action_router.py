@@ -1,111 +1,95 @@
 # apps/backend/services/action_router.py
 # =====================================================
-# AI Action Router — Canonical Dispatcher (FINAL)
+# AI Action Router — Canonical Execution Brain
 # =====================================================
 
+from __future__ import annotations
 from typing import Dict, Any
 
-from apps.backend.services.action_ledger import write_action_ledger
+from apps.backend.services.action_ledger import record_action_event
 from apps.backend.services.monetize.entitlements import (
     get_plan_for_merchant,
     can_execute_actions,
 )
 
+
 # -----------------------------------------------------
-# Preview (advisory only)
+# Preview
 # -----------------------------------------------------
 
-def preview_action(
-    action: Dict[str, Any],
-    *,
-    merchant_id: str,
-    persona: str,
-) -> Dict[str, Any]:
-    write_action_ledger(
-        merchant_id=merchant_id,
-        mode="preview",
-        plan="preview",
-        allowed=True,
-        action=action,
-        persona=persona,
-        result={"preview": True},
-    )
-
+def preview_action(action: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Preview tier:
+    - No execution
+    - Always ledgered
+    """
     return {
         "ok": True,
         "mode": "preview",
         "action": action,
         "message": "Preview only. No execution performed.",
+        "would_execute": True,
     }
 
 
 # -----------------------------------------------------
-# Execute (tier-gated)
+# Execute
 # -----------------------------------------------------
 
 def execute_action(
-    action: Dict[str, Any],
     *,
     merchant_id: str,
     persona: str,
+    action: Dict[str, Any],
 ) -> Dict[str, Any]:
+    """
+    Paid tiers only.
+    Ledgered regardless of outcome.
+    """
+
     plan = get_plan_for_merchant(merchant_id)
 
+    # -------------------------
+    # Execution denied
+    # -------------------------
     if not can_execute_actions(plan):
-        write_action_ledger(
+        record_action_event(
             merchant_id=merchant_id,
-            mode="execute",
-            plan=plan,
-            allowed=False,
-            action=action,
             persona=persona,
-            reason="plan_not_entitled",
+            action=action,
+            mode="execute",
+            outcome="denied",
+            plan=plan,
+            message="Execution denied by plan entitlement",
         )
         return {
             "ok": False,
-            "status_code": 403,
+            "mode": "execute",
             "plan": plan,
-            "message": "Plan not entitled to execute actions.",
+            "message": "Execution denied. Upgrade required.",
         }
 
-    action_type = (action.get("type") or "").lower()
+    # -------------------------
+    # Execution allowed
+    # -------------------------
+    # NOTE: Concrete execution handlers will live in
+    # apps/backend/services/execution/*
+    # and be called here WITHOUT changing ai.py
 
-    if action_type == "award_loyalty":
-        from apps.backend.services.execution.loyalty import execute_award_loyalty
-        result = execute_award_loyalty(merchant_id, action)
-
-    elif action_type == "shopify_tag":
-        from apps.backend.services.execution.shopify import execute_shopify_tag
-        result = execute_shopify_tag(merchant_id, action)
-
-    else:
-        write_action_ledger(
-            merchant_id=merchant_id,
-            mode="execute",
-            plan=plan,
-            allowed=False,
-            action=action,
-            persona=persona,
-            reason="unknown_action_type",
-        )
-        return {
-            "ok": False,
-            "message": f"Unknown action type: {action_type}",
-        }
-
-    write_action_ledger(
+    record_action_event(
         merchant_id=merchant_id,
-        mode="execute",
-        plan=plan,
-        allowed=True,
-        action=action,
         persona=persona,
-        result=result,
+        action=action,
+        mode="execute",
+        outcome="executed",
+        plan=plan,
+        message="Action accepted and executed",
     )
 
     return {
         "ok": True,
         "mode": "execute",
+        "plan": plan,
         "action": action,
-        "result": result,
+        "message": "Action executed successfully.",
     }
