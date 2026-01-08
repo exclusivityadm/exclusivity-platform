@@ -1,117 +1,97 @@
 # apps/backend/routes/merchant.py
 # =====================================================
-# Exclusivity Backend — STEP 21
-# MERCHANT ROUTES (CONTRACT COMPLIANT)
-#
-# This file strictly conforms to:
-#   apps/backend/contracts/api.py
-#
-# ❌ No ad-hoc response shapes
-# ❌ No implicit keys
-# ✅ ApiResponse[T] ONLY
+# Exclusivity Backend — Merchant Routes (Canonical)
 # =====================================================
 
-from __future__ import annotations
-
-from fastapi import APIRouter
-from typing import List
-
+from fastapi import APIRouter, HTTPException
+from apps.backend.contracts.api import api_ok, api_error
 from apps.backend.routes.services.supabase_admin import (
     SupabaseAdminError,
     select_one,
-    select_many,
 )
 
-from apps.backend.contracts.api import (
-    ApiOk,
-    ApiErr,
-    ApiResponse,
-    MerchantProfile,
-    MerchantSettings,
-    MerchantTier,
-)
+router = APIRouter(tags=["merchant"])
 
-router = APIRouter(tags=["merchant"])  # prefix owned by main.py
 
-# -----------------------------------------------------
-# GET /merchant/profile
-# -----------------------------------------------------
-@router.get("/profile", response_model=ApiResponse[MerchantProfile])
+@router.get("/profile")
 def merchant_profile(shop_domain: str):
     shop_domain = (shop_domain or "").strip().lower()
     if not shop_domain:
-        return ApiErr(
-            code="merchant.invalid",
-            message="Missing shop_domain",
+        return api_error(
+            "Missing shop_domain",
+            code="missing_shop_domain",
         )
 
     try:
-        row = select_one(
+        merchant = select_one(
             "merchants",
             {"shop_domain": shop_domain},
-            columns="merchant_id,shop_domain,installed,created_at,updated_at",
+            columns="""
+                merchant_id,
+                shop_domain,
+                installed,
+                created_at,
+                updated_at
+            """,
         )
 
-        if not row:
-            return ApiErr(
-                code="merchant.not_found",
-                message="Merchant not found for shop_domain",
+        if not merchant:
+            return api_error(
+                "Merchant not found",
+                code="merchant_not_found",
             )
 
-        return ApiOk(
-            data=MerchantProfile(
-                merchant_id=row["merchant_id"],
-                shop_domain=row["shop_domain"],
-                installed=bool(row.get("installed", True)),
-                created_at=row.get("created_at"),
-                updated_at=row.get("updated_at"),
-            )
+        return api_ok(
+            {
+                "merchant_id": merchant["merchant_id"],
+                "shop_domain": merchant["shop_domain"],
+                "installed": bool(merchant.get("installed", True)),
+                "created_at": merchant.get("created_at"),
+                "updated_at": merchant.get("updated_at"),
+            }
         )
 
     except SupabaseAdminError as e:
-        return ApiErr(
-            code="internal.error",
-            message="Supabase error resolving merchant",
-            details={"error": str(e)},
+        return api_error(
+            "Supabase error",
+            code="supabase_error",
+            details=str(e),
         )
-
     except Exception as e:
-        return ApiErr(
-            code="internal.error",
-            message="Unexpected merchant/profile error",
-            details={"error": str(e)},
+        return api_error(
+            "Unhandled merchant/profile error",
+            code="merchant_profile_exception",
+            details=str(e),
         )
 
 
-# -----------------------------------------------------
-# GET /merchant/settings
-# -----------------------------------------------------
-@router.get("/settings", response_model=ApiResponse[MerchantSettings])
+@router.get("/settings")
 def merchant_settings(merchant_id: str):
     if not merchant_id:
-        return ApiErr(
-            code="merchant.invalid",
-            message="Missing merchant_id",
+        return api_error(
+            "Missing merchant_id",
+            code="missing_merchant_id",
         )
 
-    return ApiOk(
-        data=MerchantSettings(
-            merchant_id=merchant_id,
-            settings={},
-        )
+    return api_ok(
+        {
+            "merchant_id": merchant_id,
+            "settings": {},
+        }
     )
 
 
-# -----------------------------------------------------
-# GET /merchant/tiers
-# -----------------------------------------------------
-@router.get("/tiers", response_model=ApiResponse[List[MerchantTier]])
+@router.get("/tiers")
 def merchant_tiers(merchant_id: str):
     if not merchant_id:
-        return ApiErr(
-            code="merchant.invalid",
-            message="Missing merchant_id",
+        return api_error(
+            "Missing merchant_id",
+            code="missing_merchant_id",
         )
 
-    # Placeholder — real tiers come later
-    return ApiOk(data=[])
+    return api_ok(
+        {
+            "merchant_id": merchant_id,
+            "tiers": [],
+        }
+    )
