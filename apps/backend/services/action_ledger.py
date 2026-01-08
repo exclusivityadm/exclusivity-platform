@@ -1,46 +1,37 @@
 # apps/backend/services/action_ledger.py
 # =====================================================
-# Action Ledger (Canonical)
+# Action Ledger — Canonical, Immutable, Day-One
 #
-# RULES (LOCKED):
-# - Ledger ALL actions:
-#     • preview
-#     • execute
-#     • denied / blocked
-# - Service-role only writes
-# - Best-effort: never break execution flow
+# Records ALL AI actions:
+# - previews
+# - denied executions
+# - successful executions
+#
+# Append-only. No updates. No deletes.
 # =====================================================
 
 from __future__ import annotations
-
+from typing import Dict, Any
+import time
+import uuid
 import os
 import json
-import time
-from typing import Any, Dict, Optional
-
 import requests
 
 
 # -----------------------------------------------------
-# Env helpers
+# Supabase (service role only)
 # -----------------------------------------------------
 
-def _env(name: str, default: str = "") -> str:
-    return (os.getenv(name, default) or "").strip()
-
-def _must_env(name: str) -> str:
-    v = _env(name)
+def _env(name: str) -> str:
+    v = (os.getenv(name) or "").strip()
     if not v:
         raise RuntimeError(f"Missing env var: {name}")
     return v
 
 
-# -----------------------------------------------------
-# Supabase (service role)
-# -----------------------------------------------------
-
 def _sb_headers() -> Dict[str, str]:
-    key = _must_env("SUPABASE_SERVICE_ROLE_KEY")
+    key = _env("SUPABASE_SERVICE_ROLE_KEY")
     return {
         "apikey": key,
         "Authorization": f"Bearer {key}",
@@ -48,61 +39,64 @@ def _sb_headers() -> Dict[str, str]:
         "Accept": "application/json",
     }
 
+
 def _sb_url(path: str) -> str:
-    return _must_env("SUPABASE_URL").rstrip("/") + path
+    return _env("SUPABASE_URL").rstrip("/") + path
+
+
+def _sb_insert(table: str, row: Dict[str, Any]) -> None:
+    h = _sb_headers()
+    h["Prefer"] = "return=minimal"
+    r = requests.post(
+        _sb_url(f"/rest/v1/{table}"),
+        headers=h,
+        data=json.dumps(row),
+        timeout=30,
+    )
+    if r.status_code >= 400:
+        raise RuntimeError(f"Action ledger insert failed: {r.text}")
 
 
 # -----------------------------------------------------
 # Public API
 # -----------------------------------------------------
 
-def write_action_ledger(
+def record_action_event(
     *,
     merchant_id: str,
-    mode: str,                 # "preview" | "execute"
-    plan: str,
-    allowed: bool,
+    persona: str,
     action: Dict[str, Any],
-    persona: Optional[str] = None,
-    request_id: Optional[str] = None,
-    reason: Optional[str] = None,
-    result: Optional[Dict[str, Any]] = None,
-) -> None:
+    mode: str,              # preview | execute
+    outcome: str,           # allowed | denied | executed | failed
+    plan: str,
+    message: str,
+) -> Dict[str, Any]:
     """
-    Best-effort ledger write.
-    This MUST NEVER throw upstream.
+    Canonical action ledger writer.
+    ALWAYS called exactly once per AI action decision.
     """
-    try:
-        row = {
-            "merchant_id": merchant_id,
-            "mode": mode,
-            "plan": plan,
-            "allowed": bool(allowed),
-            "persona": persona,
-            "request_id": request_id,
-            "reason": reason,
-            "action": action,
-            "result": result,
-            "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        }
 
-        headers = _sb_headers()
-        headers["Prefer"] = "return=minimal"
+    event_id = str(uuid.uuid4())
+    now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
-        r = requests.post(
-            _sb_url("/rest/v1/action_ledger"),
-            headers=headers,
-            data=json.dumps(row),
-            timeout=30,
-        )
+    row = {
+        "event_id": event_id,
+        "merchant_id": merchant_id,
+        "persona": persona,
+        "action_type": action.get("type"),
+        "action_payload": action,
+        "mode": mode,
+        "outcome": outcome,
+        "plan": plan,
+        "message": message,
+        "created_at": now_iso,
+    }
 
-        # Ignore duplicates / conflicts silently
-        if r.status_code >= 400:
-            txt = (r.text or "").lower()
-            if "duplicate" in txt or "unique" in txt:
-                return
-            return
+    _sb_insert("action_ledger", row)
 
-    except Exception:
-        # Ledger failures must NEVER block execution
-        return
+    return {
+        "ok": True,
+        "event_id": event_id,
+        "mode": mode,
+        "outcome": outcome,
+    }
