@@ -1,12 +1,19 @@
 # apps/backend/main.py
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 import os, importlib, logging, time
 from apps.backend.services.admin.logger import log_request_response
 
 log = logging.getLogger("uvicorn")
 
 app = FastAPI(title="Exclusivity API", version="1.0.0")
+
+# ---------------- ROOT (REQUIRED FOR SHOPIFY INSTALL) ----------------
+@app.get("/", include_in_schema=False)
+@app.head("/", include_in_schema=False)
+def root():
+    return JSONResponse({"status": "ok"})
 
 # ---------------- CORS ----------------
 origins = [o.strip() for o in os.getenv("CORS_ALLOW_ORIGINS", "").split(",") if o.strip()]
@@ -27,6 +34,7 @@ async def audit_logger(request: Request, call_next):
     await log_request_response(request, response, start)
     return response
 
+# ---------------- HEALTH ----------------
 @app.get("/health")
 def health():
     return {"ok": True}
