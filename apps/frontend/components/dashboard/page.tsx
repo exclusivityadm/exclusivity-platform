@@ -8,7 +8,7 @@ import { BriefingPanel } from "@/components/dashboard/BriefingPanel";
 import { PricingPanel } from "@/components/dashboard/PricingPanel";
 import { MintActivityPanel } from "@/components/dashboard/MintActivityPanel";
 import { InvoicePanel } from "@/components/dashboard/InvoicePanel";
-import { ActionsPanel } from "@/components/dashboard/ActionsPanel";
+import ActionsPanel from "@/components/dashboard/ActionsPanel";
 
 import { getSystemHealth, getLoyaltyHealth } from "@/lib/dashboardApi";
 import { getLatestPricing, getMintJobs, getLatestInvoice } from "@/lib/ui03Api";
@@ -19,7 +19,7 @@ function param(name: string) {
 }
 
 export default function DashboardPage() {
-  const merchant_id = param("merchant_id");
+  const merchantId = param("merchant_id");
 
   const [sys, setSys] = useState<any | null>(null);
   const [loyalty, setLoyalty] = useState<any | null>(null);
@@ -35,16 +35,16 @@ export default function DashboardPage() {
   }, []);
 
   useEffect(() => {
-    if (!merchant_id) return;
+    if (!merchantId) return;
 
     import("@/lib/dashboardApi").then(({ getDailyBriefing }) => {
-      getDailyBriefing(merchant_id).then((r: any) => r.ok && setBriefing(r.data));
+      getDailyBriefing(merchantId).then((r: any) => r.ok && setBriefing(r.data));
     });
 
-    getLatestPricing(merchant_id).then((r) => r.ok && setPricing(r.data));
-    getMintJobs(merchant_id).then((r) => r.ok && setJobs(r.data));
-    getLatestInvoice(merchant_id).then((r) => r.ok && setInvoice(r.data));
-  }, [merchant_id]);
+    getLatestPricing(merchantId).then((r) => r.ok && setPricing(r.data));
+    getMintJobs(merchantId).then((r) => r.ok && setJobs(r.data));
+    getLatestInvoice(merchantId).then((r) => r.ok && setInvoice(r.data));
+  }, [merchantId]);
 
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-50 p-6">
@@ -61,23 +61,17 @@ export default function DashboardPage() {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <MetricCard label="System" value={sys?.ok ? "OK" : "—"} />
             <MetricCard label="Loyalty" value={loyalty?.ok ? "OK" : "—"} />
-            <MetricCard label="Merchant" value={merchant_id || "—"} />
+            <MetricCard label="Merchant" value={merchantId || "—"} />
           </div>
         </Section>
 
         <BriefingPanel briefing={briefing?.briefing ?? briefing} />
-
         <PricingPanel rec={pricing} />
         <MintActivityPanel jobs={jobs} />
         <InvoicePanel invoice={invoice} />
 
-        {merchant_id ? (
-          <ActionsPanel
-            merchant_id={merchant_id}
-            pricing={pricing}
-            jobs={jobs}
-            invoice={invoice}
-          />
+        {merchantId ? (
+          <ActionsPanel merchantId={merchantId} />
         ) : (
           <Section title="Actions">
             <div className="text-sm text-neutral-400">
