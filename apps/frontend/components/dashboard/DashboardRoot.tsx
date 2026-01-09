@@ -1,9 +1,19 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { fetchMerchantProfile } from "@/lib/api/merchant";
-import type { ApiResult } from "@/lib/api/types";
-import type { MerchantProfile } from "@/lib/types/merchant";
+
+/**
+ * IMPORTANT:
+ * This project is a monorepo. In production (Vercel + Turbopack),
+ * the `@/` alias resolves relative to `apps/frontend`, not repo root.
+ *
+ * Therefore ALL frontend imports must be relative unless the alias
+ * is explicitly reconfigured.
+ */
+
+import { fetchMerchantProfile } from "../../lib/api/merchant";
+import type { ApiResult } from "../../lib/api/types";
+import type { MerchantProfile } from "../../lib/types/merchant";
 
 export default function DashboardRoot() {
   const [loading, setLoading] = useState(true);
