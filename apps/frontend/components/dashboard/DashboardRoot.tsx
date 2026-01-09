@@ -4,8 +4,7 @@ import { useEffect, useState } from "react";
 
 /**
  * Frontend-local merchant shape.
- * This intentionally does NOT import backend/shared types.
- * The frontend must be independently deployable.
+ * The frontend must be independently deployable (no shared backend imports).
  */
 type MerchantProfile = {
   merchant_id: string;
@@ -15,17 +14,17 @@ type MerchantProfile = {
   sniff_state?: "not_started" | "queued" | "running" | "completed" | "failed";
 };
 
-type ApiOk<T> = {
-  ok: true;
-  data: T;
-};
-
-type ApiErr = {
-  ok: false;
-  error?: string;
-};
-
+type ApiOk<T> = { ok: true; data: T };
+type ApiErr = { ok: false; error?: string };
 type ApiResult<T> = ApiOk<T> | ApiErr;
+
+function getErrorMessage<T>(r: ApiResult<T>): string {
+  // Explicit narrowing that TypeScript always accepts.
+  if (!r.ok && "error" in r && typeof r.error === "string" && r.error.trim()) {
+    return r.error;
+  }
+  return "Unable to load merchant profile";
+}
 
 export default function DashboardRoot() {
   const [loading, setLoading] = useState(true);
@@ -42,15 +41,15 @@ export default function DashboardRoot() {
       let result: ApiResult<MerchantProfile>;
 
       try {
-        const res = await fetch(
-          `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/merchant/profile`,
-          { credentials: "include" }
-        );
+        const base = process.env.NEXT_PUBLIC_BACKEND_URL || "";
+        const url = `${base}/api/merchant/profile`;
+
+        const res = await fetch(url, { credentials: "include" });
 
         if (!res.ok) {
           result = { ok: false, error: "Backend request failed" };
         } else {
-          result = await res.json();
+          result = (await res.json()) as ApiResult<MerchantProfile>;
         }
       } catch {
         result = { ok: false, error: "Network error contacting backend" };
@@ -58,11 +57,7 @@ export default function DashboardRoot() {
 
       if (!result.ok) {
         if (!cancelled) {
-          setError(
-            typeof result.error === "string"
-              ? result.error
-              : "Unable to load merchant profile"
-          );
+          setError(getErrorMessage(result));
           setLoading(false);
         }
         return;
@@ -75,6 +70,7 @@ export default function DashboardRoot() {
     }
 
     loadMerchant();
+
     return () => {
       cancelled = true;
     };
