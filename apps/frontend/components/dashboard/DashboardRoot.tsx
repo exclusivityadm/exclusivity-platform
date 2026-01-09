@@ -1,19 +1,25 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import type { MerchantProfile } from "../../lib/types/merchant";
+
+type ApiOk<T> = {
+  ok: true;
+  data: T;
+};
+
+type ApiErr = {
+  ok: false;
+  error?: string;
+};
+
+type ApiResult<T> = ApiOk<T> | ApiErr;
 
 /**
- * IMPORTANT:
- * This project is a monorepo. In production (Vercel + Turbopack),
- * the `@/` alias resolves relative to `apps/frontend`, not repo root.
- *
- * Therefore ALL frontend imports must be relative unless the alias
- * is explicitly reconfigured.
+ * NOTE:
+ * The frontend calls the backend over HTTP.
+ * We do NOT import backend API helpers into the frontend.
  */
-
-import { fetchMerchantProfile } from "../../lib/api/merchant";
-import type { ApiResult } from "../../lib/api/types";
-import type { MerchantProfile } from "../../lib/types/merchant";
 
 export default function DashboardRoot() {
   const [loading, setLoading] = useState(true);
@@ -30,23 +36,29 @@ export default function DashboardRoot() {
       let result: ApiResult<MerchantProfile>;
 
       try {
-        result = await fetchMerchantProfile();
-      } catch {
-        if (!cancelled) {
-          setError("Unable to load merchant profile");
-          setLoading(false);
+        const res = await fetch(
+          `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/merchant/profile`,
+          {
+            credentials: "include",
+          }
+        );
+
+        if (!res.ok) {
+          result = { ok: false, error: "Backend request failed" };
+        } else {
+          result = await res.json();
         }
-        return;
+      } catch {
+        result = { ok: false, error: "Network error contacting backend" };
       }
 
       if (!result.ok) {
         if (!cancelled) {
-          const message =
-            "error" in result && typeof result.error === "string"
+          setError(
+            typeof result.error === "string"
               ? result.error
-              : "Unable to load merchant profile";
-
-          setError(message);
+              : "Unable to load merchant profile"
+          );
           setLoading(false);
         }
         return;
