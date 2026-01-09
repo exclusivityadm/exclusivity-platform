@@ -1,84 +1,96 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { apiGet } from "@/lib/exclusivityApi";
 
-type DebugRoutes = { routes?: string[] } | any;
+type ApiOk<T> = { ok: true; data: T };
+type ApiErr = { ok: false; error?: string };
+type ApiResult<T> = ApiOk<T> | ApiErr;
 
-type LoyaltyHealth = {
-  ok?: boolean;
-  checks?: Record<string, boolean>;
-  [k: string]: any;
+type RouteInfo = {
+  path: string;
+  status: string;
 };
 
-export default function EngineStatusCard({
-  merchantId,
-  shopDomain,
-}: {
-  merchantId: string;
-  shopDomain: string | null;
-}) {
-  const [routes, setRoutes] = useState<DebugRoutes | null>(null);
-  const [loyalty, setLoyalty] = useState<LoyaltyHealth | null>(null);
+type LoyaltyHealth = {
+  status: "ok" | "degraded" | "down";
+};
+
+function getErrorMessage<T>(r: ApiResult<T>, fallback: string) {
+  if (!r.ok && "error" in r && typeof r.error === "string" && r.error.trim()) {
+    return r.error;
+  }
+  return fallback;
+}
+
+export default function EngineStatusCard() {
+  const [routes, setRoutes] = useState<RouteInfo[]>([]);
+  const [health, setHealth] = useState<LoyaltyHealth | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
 
-    async function run() {
-      setErr(null);
+    async function load() {
+      try {
+        const base = process.env.NEXT_PUBLIC_BACKEND_URL || "";
 
-      const r = await apiGet<DebugRoutes>("/debug/routes");
-      if (!cancelled) {
-        if (r.ok) setRoutes(r.data);
-        else setErr(r.error || "Failed to load routes");
-      }
+        const rRes = await fetch(`${base}/api/routes`, {
+          credentials: "include",
+        });
 
-      const lh = await apiGet<LoyaltyHealth>("/loyalty/health");
-      if (!cancelled) {
-        if (lh.ok) setLoyalty(lh.data);
-        else setErr((prev) => prev || lh.error || "Failed to load loyalty health");
+        const r: ApiResult<RouteInfo[]> = rRes.ok
+          ? await rRes.json()
+          : { ok: false, error: "Failed to load routes" };
+
+        if (!cancelled) {
+          if (r.ok) setRoutes(r.data);
+          else setErr(getErrorMessage(r, "Failed to load routes"));
+        }
+
+        const hRes = await fetch(`${base}/api/loyalty/health`, {
+          credentials: "include",
+        });
+
+        const h: ApiResult<LoyaltyHealth> = hRes.ok
+          ? await hRes.json()
+          : { ok: false };
+
+        if (!cancelled && h.ok) {
+          setHealth(h.data);
+        }
+      } catch {
+        if (!cancelled) {
+          setErr("Unable to contact backend services");
+        }
       }
     }
 
-    run();
+    load();
     return () => {
       cancelled = true;
     };
-  }, [merchantId, shopDomain]);
-
-  const checks = loyalty?.checks || {};
-  const checkList = Object.keys(checks);
+  }, []);
 
   return (
-    <section className="border rounded p-4 space-y-2">
-      <div className="font-medium">Engine Status</div>
+    <div className="rounded-md border p-4">
+      <h3 className="text-sm font-medium mb-2">Engine Status</h3>
 
-      {err && <div className="text-sm text-red-600">{err}</div>}
+      {err && <p className="text-sm text-red-600">{err}</p>}
 
-      <div className="text-xs text-gray-500">
-        Backend routes: {routes ? "ok" : "unknown"}
-      </div>
-
-      <div className="text-xs text-gray-500">
-        Loyalty health: {typeof loyalty?.ok === "boolean" ? String(loyalty.ok) : "unknown"}
-      </div>
-
-      {checkList.length > 0 && (
-        <div className="text-xs">
-          <div className="text-gray-500 mb-1">Checks</div>
-          <ul className="list-disc pl-4 space-y-1">
-            {checkList.map((k) => (
-              <li key={k}>
-                {k}:{" "}
-                <span className={checks[k] ? "text-green-700" : "text-red-700"}>
-                  {String(checks[k])}
-                </span>
-              </li>
-            ))}
-          </ul>
+      {!err && (
+        <div className="text-sm space-y-1">
+          <p>
+            Routes detected:{" "}
+            <span className="font-medium">{routes.length}</span>
+          </p>
+          <p>
+            Loyalty engine:{" "}
+            <span className="font-medium">
+              {health?.status || "checking…"}
+            </span>
+          </p>
         </div>
       )}
-    </section>
+    </div>
   );
 }
