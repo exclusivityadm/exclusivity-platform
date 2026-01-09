@@ -1,4 +1,4 @@
-import { apiGet } from "@/lib/api";
+import { apiGet } from "@/lib/exclusivityApi";
 import type { BalanceResponse } from "@/types/ledger";
 import type { ApiResult } from "@/types/api";
 
