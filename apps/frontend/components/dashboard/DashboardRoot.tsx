@@ -1,7 +1,19 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { MerchantProfile } from "../../lib/types/merchant";
+
+/**
+ * Frontend-local merchant shape.
+ * This intentionally does NOT import backend/shared types.
+ * The frontend must be independently deployable.
+ */
+type MerchantProfile = {
+  merchant_id: string;
+  shop_domain: string;
+  store_name?: string;
+  plan_name?: string;
+  sniff_state?: "not_started" | "queued" | "running" | "completed" | "failed";
+};
 
 type ApiOk<T> = {
   ok: true;
@@ -14,12 +26,6 @@ type ApiErr = {
 };
 
 type ApiResult<T> = ApiOk<T> | ApiErr;
-
-/**
- * NOTE:
- * The frontend calls the backend over HTTP.
- * We do NOT import backend API helpers into the frontend.
- */
 
 export default function DashboardRoot() {
   const [loading, setLoading] = useState(true);
@@ -38,9 +44,7 @@ export default function DashboardRoot() {
       try {
         const res = await fetch(
           `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/merchant/profile`,
-          {
-            credentials: "include",
-          }
+          { credentials: "include" }
         );
 
         if (!res.ok) {
@@ -71,7 +75,6 @@ export default function DashboardRoot() {
     }
 
     loadMerchant();
-
     return () => {
       cancelled = true;
     };
@@ -108,7 +111,7 @@ export default function DashboardRoot() {
           {merchant.store_name || merchant.shop_domain}
         </h1>
         <p className="text-sm text-muted-foreground">
-          Plan: {merchant.plan_name}
+          Plan: {merchant.plan_name || "Unknown"}
         </p>
       </header>
 
