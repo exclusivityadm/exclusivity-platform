@@ -1,7 +1,11 @@
-import { apiGet } from '@/services/http'
-import type { BalanceResponse } from '@/types/ledger'
-import type { ApiResult } from '@/types/api'
+import { apiGet } from "@/lib/api";
+import type { BalanceResponse } from "@/types/ledger";
+import type { ApiResult } from "@/types/api";
 
-export async function getLedgerSummary(): Promise<ApiResult<BalanceResponse>> {
-  return apiGet<BalanceResponse>('/ledger/summary')
+export async function getLedgerSummary(
+  merchantId: string
+): Promise<ApiResult<BalanceResponse>> {
+  return apiGet<BalanceResponse>(
+    `/ledger/summary?merchant_id=${encodeURIComponent(merchantId)}`
+  );
 }
