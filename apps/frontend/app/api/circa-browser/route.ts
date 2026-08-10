@@ -7,6 +7,9 @@ export const maxDuration = 60;
 export const dynamic = 'force-dynamic';
 
 const ALLOWED_HOSTS = new Set(['circahaus.app', 'www.circahaus.app']);
+const PROJECT_REF = 'fhxhudcixvbqitqdsdzj';
+const AUTH_STORAGE_KEY = `sb-${PROJECT_REF}-auth-token`;
+const ENGINEERING_EXCHANGE_URL = `https://${PROJECT_REF}.supabase.co/functions/v1/internal-engineering-access`;
 
 function targetFrom(request: NextRequest) {
   const rawPath = request.nextUrl.searchParams.get('path') || '/';
@@ -25,6 +28,21 @@ async function openBrowser(): Promise<Browser> {
   });
 }
 
+async function exchangeEngineeringGrant(grant: string) {
+  if (!grant) return null;
+  const response = await fetch(ENGINEERING_EXCHANGE_URL, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ action: 'exchange', grant }),
+    cache: 'no-store',
+  });
+  const body = await response.json().catch(() => ({})) as Record<string, unknown>;
+  if (!response.ok || body.ok !== true || !body.session || typeof body.session !== 'object') {
+    throw new Error(`Engineering exchange failed (${response.status}).`);
+  }
+  return body.session as Record<string, unknown>;
+}
+
 export async function GET(request: NextRequest) {
   let target: URL;
   try {
@@ -34,14 +52,22 @@ export async function GET(request: NextRequest) {
   }
 
   const mode = request.nextUrl.searchParams.get('mode') || 'snapshot';
+  const grant = request.nextUrl.searchParams.get('grant')?.trim() || '';
   const consoleErrors: string[] = [];
   const requestFailures: Array<{ url: string; error: string }> = [];
   let browser: Browser | undefined;
 
   try {
+    const engineeringSession = await exchangeEngineeringGrant(grant);
     browser = await openBrowser();
     const page = await browser.newPage();
     await page.setUserAgent('CircaHausInternalEngineeringBrowser/1.0');
+
+    if (engineeringSession) {
+      await page.evaluateOnNewDocument((storageKey, serializedSession) => {
+        try { localStorage.setItem(storageKey, serializedSession); } catch (_) {}
+      }, AUTH_STORAGE_KEY, JSON.stringify(engineeringSession));
+    }
 
     page.on('console', (message) => {
       if (message.type() === 'error') consoleErrors.push(message.text());
@@ -63,6 +89,7 @@ export async function GET(request: NextRequest) {
       if (mode === 'screenshot-json') {
         return NextResponse.json({
           ok: true,
+          authenticatedEngineeringSession: !!engineeringSession,
           requestedUrl: target.toString(),
           finalUrl: page.url(),
           status: response?.status() ?? null,
@@ -82,7 +109,7 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    const snapshot = await page.evaluate(() => {
+    const snapshot = await page.evaluate((storageKey) => {
       const interactive = Array.from(
         document.querySelectorAll('a,button,input,textarea,select,[role="button"],[role="link"]'),
       ).slice(0, 250).map((node) => {
@@ -97,17 +124,18 @@ export async function GET(request: NextRequest) {
           type: input.type || null,
         };
       });
-
       return {
         title: document.title,
         text: (document.body?.innerText || '').slice(0, 30000),
         interactive,
         htmlLength: document.documentElement?.outerHTML.length || 0,
+        hasAuthStorage: !!localStorage.getItem(storageKey),
       };
-    });
+    }, AUTH_STORAGE_KEY);
 
     return NextResponse.json({
       ok: true,
+      authenticatedEngineeringSession: !!engineeringSession,
       requestedUrl: target.toString(),
       finalUrl: page.url(),
       status: response?.status() ?? null,
