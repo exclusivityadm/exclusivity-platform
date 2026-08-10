@@ -85,6 +85,49 @@ async function enableFlutterSemantics(page: Page) {
   await new Promise(resolve => setTimeout(resolve, 900));
 }
 
+async function clickSemantic(page: Page, requestedText: string) {
+  const targetText = requestedText.trim().toLowerCase();
+  if (!targetText) return { clicked: false, reason: 'empty click text' };
+  await enableFlutterSemantics(page);
+  return page.evaluate((needle) => {
+    const roots: Array<Document | ShadowRoot> = [document];
+    const candidates: HTMLElement[] = [];
+    while (roots.length) {
+      const root = roots.shift()!;
+      for (const node of Array.from(root.querySelectorAll('*'))) {
+        const el = node as HTMLElement;
+        if (el.shadowRoot) roots.push(el.shadowRoot);
+        if (node.getAttribute('role') === 'button' || node.tagName === 'BUTTON' || node.tagName === 'A') {
+          candidates.push(el);
+        }
+      }
+    }
+    const labelFor = (el: HTMLElement) =>
+      (el.getAttribute('aria-label') || el.innerText || el.textContent || '').trim().toLowerCase();
+    const exact = candidates.find(el => labelFor(el) === needle);
+    const partial = candidates.find(el => labelFor(el).includes(needle));
+    const target = exact || partial;
+    if (!target) {
+      return {
+        clicked: false,
+        reason: 'semantic target not found',
+        candidates: candidates.map(labelFor).filter(Boolean).slice(0, 100),
+      };
+    }
+    const rect = target.getBoundingClientRect();
+    const label = labelFor(target);
+    target.click();
+    return {
+      clicked: true,
+      label,
+      x: Math.round(rect.x),
+      y: Math.round(rect.y),
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+    };
+  }, targetText);
+}
+
 async function captureAccessibilityTree(page: Page) {
   try {
     const client = await page.createCDPSession();
@@ -190,6 +233,7 @@ export async function GET(request: NextRequest) {
 
   const mode = request.nextUrl.searchParams.get('mode') || 'snapshot';
   const suite = request.nextUrl.searchParams.get('suite') || '';
+  const clickText = request.nextUrl.searchParams.get('click')?.trim() || '';
   const grant = request.nextUrl.searchParams.get('grant')?.trim() || '';
   const oidc = request.headers.get('x-vercel-oidc-token')?.trim()
     || process.env.VERCEL_OIDC_TOKEN?.trim()
@@ -236,16 +280,23 @@ export async function GET(request: NextRequest) {
     const response = await page.goto(target.toString(), { waitUntil: 'networkidle0', timeout: 30000 });
     await enableFlutterSemantics(page);
 
+    let action: Record<string, unknown> | null = null;
+    if (clickText) {
+      action = await clickSemantic(page, clickText);
+      await new Promise(resolve => setTimeout(resolve, 1200));
+      await page.waitForNetworkIdle({ idleTime: 400, timeout: 5000 }).catch(() => undefined);
+    }
+
     if (mode === 'screenshot' || mode === 'screenshot-json') {
       const png = await page.screenshot({ fullPage: true, type: 'png' });
       if (mode === 'screenshot-json') {
-        return NextResponse.json({ ok: true, authenticatedEngineeringSession: !!engineeringSession, requestedUrl: target.toString(), finalUrl: page.url(), status: response?.status() ?? null, screenshotBase64: Buffer.from(png).toString('base64'), consoleErrors: consoleErrors.slice(0, 100), requestFailures: requestFailures.slice(0, 100), capturedAt: new Date().toISOString() }, { headers: { 'cache-control': 'no-store' } });
+        return NextResponse.json({ ok: true, authenticatedEngineeringSession: !!engineeringSession, requestedUrl: target.toString(), finalUrl: page.url(), status: response?.status() ?? null, action, screenshotBase64: Buffer.from(png).toString('base64'), consoleErrors: consoleErrors.slice(0, 100), requestFailures: requestFailures.slice(0, 100), capturedAt: new Date().toISOString() }, { headers: { 'cache-control': 'no-store' } });
       }
       return new NextResponse(Buffer.from(png), { status: 200, headers: { 'content-type': 'image/png', 'cache-control': 'no-store', 'x-circa-browser-url': page.url() } });
     }
 
     const snapshot = await captureSnapshot(page);
-    return NextResponse.json({ ok: true, authenticatedEngineeringSession: !!engineeringSession, requestedUrl: target.toString(), finalUrl: page.url(), status: response?.status() ?? null, snapshot, consoleErrors: consoleErrors.slice(0, 100), requestFailures: requestFailures.slice(0, 100), capturedAt: new Date().toISOString() }, { headers: { 'cache-control': 'no-store' } });
+    return NextResponse.json({ ok: true, authenticatedEngineeringSession: !!engineeringSession, requestedUrl: target.toString(), finalUrl: page.url(), status: response?.status() ?? null, action, snapshot, consoleErrors: consoleErrors.slice(0, 100), requestFailures: requestFailures.slice(0, 100), capturedAt: new Date().toISOString() }, { headers: { 'cache-control': 'no-store' } });
   } catch (error) {
     return NextResponse.json({ ok: false, requestedUrl: target.toString(), error: error instanceof Error ? error.message : String(error), consoleErrors: consoleErrors.slice(0, 100), requestFailures: requestFailures.slice(0, 100) }, { status: 500, headers: { 'cache-control': 'no-store' } });
   } finally {
