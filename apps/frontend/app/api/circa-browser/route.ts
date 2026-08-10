@@ -27,7 +27,14 @@ const CORE_ROUTES = [
 function targetFrom(request: NextRequest) {
   const rawPath = request.nextUrl.searchParams.get('path') || '/';
   if (!rawPath.startsWith('/')) throw new Error('Path must begin with /.');
-  const target = new URL(rawPath, 'https://circahaus.app');
+
+  // Circa Haus currently uses Flutter's default hash URL strategy. A plain
+  // browser path such as /creator/home loads the web shell but leaves Flutter
+  // on its root route. Translate bridge paths into hash routes so the route
+  // visible in the browser and the route rendered by Flutter stay aligned.
+  const appRoute = rawPath.startsWith('/#/') ? rawPath.slice(2) : rawPath;
+  const target = new URL('/', 'https://circahaus.app');
+  target.hash = appRoute;
   if (!ALLOWED_HOSTS.has(target.hostname)) throw new Error('Target host is not allowed.');
   return target;
 }
@@ -213,7 +220,8 @@ export async function GET(request: NextRequest) {
     if (suite === 'core') {
       const results: Array<Record<string, unknown>> = [];
       for (const path of CORE_ROUTES) {
-        const url = new URL(path, 'https://circahaus.app');
+        const url = new URL('/', 'https://circahaus.app');
+        url.hash = path;
         try {
           const response = await page.goto(url.toString(), { waitUntil: 'networkidle0', timeout: 20000 });
           const snapshot = await captureSnapshot(page);
