@@ -38,7 +38,9 @@ async function exchangeEngineeringGrant(grant: string) {
   });
   const body = await response.json().catch(() => ({})) as Record<string, unknown>;
   if (!response.ok || body.ok !== true || !body.session || typeof body.session !== 'object') {
-    throw new Error(`Engineering exchange failed (${response.status}).`);
+    const stage = typeof body.stage === 'string' ? body.stage : 'unknown';
+    const detail = typeof body.detail === 'string' ? body.detail : (typeof body.error === 'string' ? body.error : 'unknown');
+    throw new Error(`Engineering exchange failed (${response.status}) at ${stage}: ${detail}`);
   }
   return body.session as Record<string, unknown>;
 }
