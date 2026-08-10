@@ -58,8 +58,20 @@ export async function GET(request: NextRequest) {
       timeout: 30000,
     });
 
-    if (mode === 'screenshot') {
+    if (mode === 'screenshot' || mode === 'screenshot-json') {
       const png = await page.screenshot({ fullPage: true, type: 'png' });
+      if (mode === 'screenshot-json') {
+        return NextResponse.json({
+          ok: true,
+          requestedUrl: target.toString(),
+          finalUrl: page.url(),
+          status: response?.status() ?? null,
+          screenshotBase64: Buffer.from(png).toString('base64'),
+          consoleErrors: consoleErrors.slice(0, 100),
+          requestFailures: requestFailures.slice(0, 100),
+          capturedAt: new Date().toISOString(),
+        }, { headers: { 'cache-control': 'no-store' } });
+      }
       return new NextResponse(Buffer.from(png), {
         status: 200,
         headers: {
