@@ -41,12 +41,15 @@ async function openBrowser(): Promise<Browser> {
   });
 }
 
-async function exchangeEngineeringGrant(grant: string) {
-  if (!grant) return null;
+async function exchangeEngineeringSession(grant: string) {
+  const oidc = process.env.VERCEL_OIDC_TOKEN?.trim() || '';
+  if (!grant && !oidc) return null;
+  const headers: Record<string, string> = { 'content-type': 'application/json' };
+  if (oidc) headers.authorization = `Bearer ${oidc}`;
   const response = await fetch(ENGINEERING_EXCHANGE_URL, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ action: 'exchange', grant }),
+    headers,
+    body: JSON.stringify({ action: 'exchange', ...(grant ? { grant } : {}) }),
     cache: 'no-store',
   });
   const body = await response.json().catch(() => ({})) as Record<string, unknown>;
@@ -113,7 +116,7 @@ export async function GET(request: NextRequest) {
   let browser: Browser | undefined;
 
   try {
-    const engineeringSession = await exchangeEngineeringGrant(grant);
+    const engineeringSession = await exchangeEngineeringSession(grant);
     browser = await openBrowser();
     const page = await browser.newPage();
     await page.setUserAgent('CircaHausInternalEngineeringBrowser/1.0');
@@ -128,10 +131,7 @@ export async function GET(request: NextRequest) {
       if (message.type() === 'error') consoleErrors.push(message.text());
     });
     page.on('requestfailed', (failed) => {
-      requestFailures.push({
-        url: failed.url(),
-        error: failed.failure()?.errorText || 'request failed',
-      });
+      requestFailures.push({ url: failed.url(), error: failed.failure()?.errorText || 'request failed' });
     });
 
     if (suite === 'core') {
@@ -146,70 +146,24 @@ export async function GET(request: NextRequest) {
           results.push({ path, finalUrl: page.url(), error: error instanceof Error ? error.message : String(error) });
         }
       }
-      return NextResponse.json({
-        ok: true,
-        authenticatedEngineeringSession: !!engineeringSession,
-        suite: 'core',
-        routeCount: results.length,
-        results,
-        consoleErrors: consoleErrors.slice(0, 200),
-        requestFailures: requestFailures.slice(0, 200),
-        capturedAt: new Date().toISOString(),
-      }, { headers: { 'cache-control': 'no-store' } });
+      return NextResponse.json({ ok: true, authenticatedEngineeringSession: !!engineeringSession, suite: 'core', routeCount: results.length, results, consoleErrors: consoleErrors.slice(0, 200), requestFailures: requestFailures.slice(0, 200), capturedAt: new Date().toISOString() }, { headers: { 'cache-control': 'no-store' } });
     }
 
-    const response = await page.goto(target.toString(), {
-      waitUntil: 'networkidle0',
-      timeout: 30000,
-    });
+    const response = await page.goto(target.toString(), { waitUntil: 'networkidle0', timeout: 30000 });
     await enableFlutterSemantics(page);
 
     if (mode === 'screenshot' || mode === 'screenshot-json') {
       const png = await page.screenshot({ fullPage: true, type: 'png' });
       if (mode === 'screenshot-json') {
-        return NextResponse.json({
-          ok: true,
-          authenticatedEngineeringSession: !!engineeringSession,
-          requestedUrl: target.toString(),
-          finalUrl: page.url(),
-          status: response?.status() ?? null,
-          screenshotBase64: Buffer.from(png).toString('base64'),
-          consoleErrors: consoleErrors.slice(0, 100),
-          requestFailures: requestFailures.slice(0, 100),
-          capturedAt: new Date().toISOString(),
-        }, { headers: { 'cache-control': 'no-store' } });
+        return NextResponse.json({ ok: true, authenticatedEngineeringSession: !!engineeringSession, requestedUrl: target.toString(), finalUrl: page.url(), status: response?.status() ?? null, screenshotBase64: Buffer.from(png).toString('base64'), consoleErrors: consoleErrors.slice(0, 100), requestFailures: requestFailures.slice(0, 100), capturedAt: new Date().toISOString() }, { headers: { 'cache-control': 'no-store' } });
       }
-      return new NextResponse(Buffer.from(png), {
-        status: 200,
-        headers: {
-          'content-type': 'image/png',
-          'cache-control': 'no-store',
-          'x-circa-browser-url': page.url(),
-        },
-      });
+      return new NextResponse(Buffer.from(png), { status: 200, headers: { 'content-type': 'image/png', 'cache-control': 'no-store', 'x-circa-browser-url': page.url() } });
     }
 
     const snapshot = await captureSnapshot(page);
-
-    return NextResponse.json({
-      ok: true,
-      authenticatedEngineeringSession: !!engineeringSession,
-      requestedUrl: target.toString(),
-      finalUrl: page.url(),
-      status: response?.status() ?? null,
-      snapshot,
-      consoleErrors: consoleErrors.slice(0, 100),
-      requestFailures: requestFailures.slice(0, 100),
-      capturedAt: new Date().toISOString(),
-    }, { headers: { 'cache-control': 'no-store' } });
+    return NextResponse.json({ ok: true, authenticatedEngineeringSession: !!engineeringSession, requestedUrl: target.toString(), finalUrl: page.url(), status: response?.status() ?? null, snapshot, consoleErrors: consoleErrors.slice(0, 100), requestFailures: requestFailures.slice(0, 100), capturedAt: new Date().toISOString() }, { headers: { 'cache-control': 'no-store' } });
   } catch (error) {
-    return NextResponse.json({
-      ok: false,
-      requestedUrl: target.toString(),
-      error: error instanceof Error ? error.message : String(error),
-      consoleErrors: consoleErrors.slice(0, 100),
-      requestFailures: requestFailures.slice(0, 100),
-    }, { status: 500, headers: { 'cache-control': 'no-store' } });
+    return NextResponse.json({ ok: false, requestedUrl: target.toString(), error: error instanceof Error ? error.message : String(error), consoleErrors: consoleErrors.slice(0, 100), requestFailures: requestFailures.slice(0, 100) }, { status: 500, headers: { 'cache-control': 'no-store' } });
   } finally {
     await browser?.close().catch(() => undefined);
   }
