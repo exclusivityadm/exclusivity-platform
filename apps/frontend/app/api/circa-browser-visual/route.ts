@@ -20,6 +20,12 @@ function targetFrom(request: NextRequest) {
   return target;
 }
 
+function boundedInt(value: string | null, fallback: number, min: number, max: number) {
+  const parsed = Number.parseInt(value || '', 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, parsed));
+}
+
 async function exchangeEngineeringSession(oidc: string) {
   if (!oidc) throw new Error('Vercel OIDC token is unavailable.');
   const response = await fetch(ENGINEERING_EXCHANGE_URL, {
@@ -90,6 +96,13 @@ export async function GET(request: NextRequest) {
     await client.detach();
 
     const bytes = Buffer.from(shot.data, 'base64');
+    const sha256 = createHash('sha256').update(bytes).digest('hex');
+    const chunkSize = boundedInt(request.nextUrl.searchParams.get('chunkSize'), 1200, 200, 3000);
+    const totalChunks = Math.max(1, Math.ceil(shot.data.length / chunkSize));
+    const chunkIndex = boundedInt(request.nextUrl.searchParams.get('chunk'), 0, 0, Math.max(0, totalChunks - 1));
+    const start = chunkIndex * chunkSize;
+    const screenshotBase64Chunk = shot.data.slice(start, start + chunkSize);
+
     return NextResponse.json({
       ok: true,
       authenticatedEngineeringSession: true,
@@ -100,8 +113,13 @@ export async function GET(request: NextRequest) {
       sourceDimensions: { width: 1440, height: 1100 },
       visualDimensions: { width: 360, height: 275 },
       byteLength: bytes.length,
-      sha256: createHash('sha256').update(bytes).digest('hex'),
-      screenshotBase64: shot.data,
+      sha256,
+      base64Length: shot.data.length,
+      chunkSize,
+      chunkIndex,
+      totalChunks,
+      chunkSha256: createHash('sha256').update(screenshotBase64Chunk).digest('hex'),
+      screenshotBase64Chunk,
       capturedAt: new Date().toISOString(),
     }, { headers: { 'cache-control': 'no-store' } });
   } catch (error) {
