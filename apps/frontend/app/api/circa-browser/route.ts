@@ -61,20 +61,83 @@ async function exchangeEngineeringSession(grant: string, oidc: string) {
 }
 
 async function enableFlutterSemantics(page: Page) {
-  const placeholder = await page.$('flt-semantics-placeholder[aria-label="Enable accessibility"]');
-  if (placeholder) {
-    await placeholder.click().catch(() => undefined);
-    await new Promise(resolve => setTimeout(resolve, 500));
+  await page.evaluate(() => {
+    const visit = (root: Document | ShadowRoot): HTMLElement | null => {
+      const direct = root.querySelector('flt-semantics-placeholder[aria-label="Enable accessibility"]') as HTMLElement | null;
+      if (direct) return direct;
+      for (const el of Array.from(root.querySelectorAll('*'))) {
+        if ((el as HTMLElement).shadowRoot) {
+          const found = visit((el as HTMLElement).shadowRoot!);
+          if (found) return found;
+        }
+      }
+      return null;
+    };
+    visit(document)?.click();
+  }).catch(() => undefined);
+  await new Promise(resolve => setTimeout(resolve, 900));
+}
+
+async function captureAccessibilityTree(page: Page) {
+  try {
+    const client = await page.createCDPSession();
+    await client.send('Accessibility.enable');
+    const tree = await client.send('Accessibility.getFullAXTree') as { nodes?: Array<Record<string, any>> };
+    await client.detach();
+    return (tree.nodes || []).slice(0, 800).map((node) => ({
+      nodeId: node.nodeId ?? null,
+      parentId: node.parentId ?? null,
+      ignored: !!node.ignored,
+      role: node.role?.value ?? null,
+      name: node.name?.value ?? null,
+      value: node.value?.value ?? null,
+      description: node.description?.value ?? null,
+      properties: Array.isArray(node.properties)
+        ? node.properties
+            .filter((property: any) => ['focusable', 'focused', 'editable', 'disabled', 'checked', 'selected', 'expanded', 'hasPopup'].includes(property.name))
+            .map((property: any) => ({ name: property.name, value: property.value?.value ?? null }))
+        : [],
+    }));
+  } catch {
+    return [];
   }
 }
 
 async function captureSnapshot(page: Page) {
   await enableFlutterSemantics(page);
-  return page.evaluate((storageKey) => {
-    const nodes = Array.from(document.querySelectorAll('[aria-label],[role],a,button,input,textarea,select'));
-    const interactive = nodes.slice(0, 500).map((node) => {
+  const dom = await page.evaluate((storageKey) => {
+    const roots: Array<Document | ShadowRoot> = [document];
+    const seen = new Set<Node>();
+    const nodes: Element[] = [];
+    let shadowRootCount = 0;
+
+    while (roots.length) {
+      const root = roots.shift()!;
+      for (const node of Array.from(root.querySelectorAll('*'))) {
+        if (!seen.has(node)) {
+          seen.add(node);
+          nodes.push(node);
+        }
+        const shadow = (node as HTMLElement).shadowRoot;
+        if (shadow && !seen.has(shadow)) {
+          seen.add(shadow);
+          shadowRootCount += 1;
+          roots.push(shadow);
+        }
+      }
+    }
+
+    const interesting = nodes.filter((node) =>
+      node.hasAttribute('aria-label') ||
+      node.hasAttribute('role') ||
+      ['A', 'BUTTON', 'INPUT', 'TEXTAREA', 'SELECT'].includes(node.tagName) ||
+      node.tagName.toLowerCase().startsWith('flt-semantics')
+    );
+
+    const interactive = interesting.slice(0, 800).map((node) => {
       const el = node as HTMLElement;
       const input = node as HTMLInputElement;
+      const rect = el.getBoundingClientRect();
       return {
         tag: node.tagName.toLowerCase(),
         text: (el.innerText || input.value || '').trim().slice(0, 220),
@@ -82,12 +145,18 @@ async function captureSnapshot(page: Page) {
         role: node.getAttribute('role'),
         href: node instanceof HTMLAnchorElement ? node.href : null,
         type: input.type || null,
+        x: Math.round(rect.x),
+        y: Math.round(rect.y),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
       };
     });
-    const labels = nodes
+
+    const labels = interesting
       .map(node => node.getAttribute('aria-label'))
       .filter((value): value is string => !!value && value.trim().length > 0)
-      .slice(0, 500);
+      .slice(0, 800);
+
     return {
       title: document.title,
       text: (document.body?.innerText || '').slice(0, 30000),
@@ -95,8 +164,13 @@ async function captureSnapshot(page: Page) {
       interactive,
       htmlLength: document.documentElement?.outerHTML.length || 0,
       hasAuthStorage: !!localStorage.getItem(storageKey),
+      shadowRootCount,
+      fltSemanticsCount: nodes.filter(node => node.tagName.toLowerCase().startsWith('flt-semantics')).length,
+      canvasCount: nodes.filter(node => node.tagName.toLowerCase() === 'canvas').length,
     };
   }, AUTH_STORAGE_KEY);
+  const accessibility = await captureAccessibilityTree(page);
+  return { ...dom, accessibility };
 }
 
 export async function GET(request: NextRequest) {
