@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import chromium from '@sparticuz/chromium';
-import puppeteer, { type Browser } from 'puppeteer-core';
+import puppeteer, { type Browser, type Page } from 'puppeteer-core';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -10,6 +10,19 @@ const ALLOWED_HOSTS = new Set(['circahaus.app', 'www.circahaus.app']);
 const PROJECT_REF = 'fhxhudcixvbqitqdsdzj';
 const AUTH_STORAGE_KEY = `sb-${PROJECT_REF}-auth-token`;
 const ENGINEERING_EXCHANGE_URL = `https://${PROJECT_REF}.supabase.co/functions/v1/internal-engineering-access`;
+const CORE_ROUTES = [
+  '/',
+  '/creator/home',
+  '/supporter/home',
+  '/saia',
+  '/creator/brand-commerce',
+  '/creator/qr-center',
+  '/creator/campaigns',
+  '/settings',
+  '/settings/security',
+  '/appearance',
+  '/admin/security/activity',
+];
 
 function targetFrom(request: NextRequest) {
   const rawPath = request.nextUrl.searchParams.get('path') || '/';
@@ -45,6 +58,45 @@ async function exchangeEngineeringGrant(grant: string) {
   return body.session as Record<string, unknown>;
 }
 
+async function enableFlutterSemantics(page: Page) {
+  const placeholder = await page.$('flt-semantics-placeholder[aria-label="Enable accessibility"]');
+  if (placeholder) {
+    await placeholder.click().catch(() => undefined);
+    await new Promise(resolve => setTimeout(resolve, 500));
+  }
+}
+
+async function captureSnapshot(page: Page) {
+  await enableFlutterSemantics(page);
+  return page.evaluate((storageKey) => {
+    const nodes = Array.from(document.querySelectorAll('[aria-label],[role],a,button,input,textarea,select'));
+    const interactive = nodes.slice(0, 500).map((node) => {
+      const el = node as HTMLElement;
+      const input = node as HTMLInputElement;
+      return {
+        tag: node.tagName.toLowerCase(),
+        text: (el.innerText || input.value || '').trim().slice(0, 220),
+        ariaLabel: node.getAttribute('aria-label'),
+        role: node.getAttribute('role'),
+        href: node instanceof HTMLAnchorElement ? node.href : null,
+        type: input.type || null,
+      };
+    });
+    const labels = nodes
+      .map(node => node.getAttribute('aria-label'))
+      .filter((value): value is string => !!value && value.trim().length > 0)
+      .slice(0, 500);
+    return {
+      title: document.title,
+      text: (document.body?.innerText || '').slice(0, 30000),
+      labels,
+      interactive,
+      htmlLength: document.documentElement?.outerHTML.length || 0,
+      hasAuthStorage: !!localStorage.getItem(storageKey),
+    };
+  }, AUTH_STORAGE_KEY);
+}
+
 export async function GET(request: NextRequest) {
   let target: URL;
   try {
@@ -54,6 +106,7 @@ export async function GET(request: NextRequest) {
   }
 
   const mode = request.nextUrl.searchParams.get('mode') || 'snapshot';
+  const suite = request.nextUrl.searchParams.get('suite') || '';
   const grant = request.nextUrl.searchParams.get('grant')?.trim() || '';
   const consoleErrors: string[] = [];
   const requestFailures: Array<{ url: string; error: string }> = [];
@@ -81,10 +134,35 @@ export async function GET(request: NextRequest) {
       });
     });
 
+    if (suite === 'core') {
+      const results: Array<Record<string, unknown>> = [];
+      for (const path of CORE_ROUTES) {
+        const url = new URL(path, 'https://circahaus.app');
+        try {
+          const response = await page.goto(url.toString(), { waitUntil: 'networkidle0', timeout: 20000 });
+          const snapshot = await captureSnapshot(page);
+          results.push({ path, finalUrl: page.url(), status: response?.status() ?? null, snapshot });
+        } catch (error) {
+          results.push({ path, finalUrl: page.url(), error: error instanceof Error ? error.message : String(error) });
+        }
+      }
+      return NextResponse.json({
+        ok: true,
+        authenticatedEngineeringSession: !!engineeringSession,
+        suite: 'core',
+        routeCount: results.length,
+        results,
+        consoleErrors: consoleErrors.slice(0, 200),
+        requestFailures: requestFailures.slice(0, 200),
+        capturedAt: new Date().toISOString(),
+      }, { headers: { 'cache-control': 'no-store' } });
+    }
+
     const response = await page.goto(target.toString(), {
       waitUntil: 'networkidle0',
       timeout: 30000,
     });
+    await enableFlutterSemantics(page);
 
     if (mode === 'screenshot' || mode === 'screenshot-json') {
       const png = await page.screenshot({ fullPage: true, type: 'png' });
@@ -111,29 +189,7 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    const snapshot = await page.evaluate((storageKey) => {
-      const interactive = Array.from(
-        document.querySelectorAll('a,button,input,textarea,select,[role="button"],[role="link"]'),
-      ).slice(0, 250).map((node) => {
-        const el = node as HTMLElement;
-        const input = node as HTMLInputElement;
-        return {
-          tag: node.tagName.toLowerCase(),
-          text: (el.innerText || input.value || '').trim().slice(0, 180),
-          ariaLabel: node.getAttribute('aria-label'),
-          role: node.getAttribute('role'),
-          href: node instanceof HTMLAnchorElement ? node.href : null,
-          type: input.type || null,
-        };
-      });
-      return {
-        title: document.title,
-        text: (document.body?.innerText || '').slice(0, 30000),
-        interactive,
-        htmlLength: document.documentElement?.outerHTML.length || 0,
-        hasAuthStorage: !!localStorage.getItem(storageKey),
-      };
-    }, AUTH_STORAGE_KEY);
+    const snapshot = await captureSnapshot(page);
 
     return NextResponse.json({
       ok: true,
