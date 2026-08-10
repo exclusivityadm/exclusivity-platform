@@ -41,8 +41,7 @@ async function openBrowser(): Promise<Browser> {
   });
 }
 
-async function exchangeEngineeringSession(grant: string) {
-  const oidc = process.env.VERCEL_OIDC_TOKEN?.trim() || '';
+async function exchangeEngineeringSession(grant: string, oidc: string) {
   if (!grant && !oidc) return null;
   const headers: Record<string, string> = { 'content-type': 'application/json' };
   if (oidc) headers.authorization = `Bearer ${oidc}`;
@@ -111,12 +110,15 @@ export async function GET(request: NextRequest) {
   const mode = request.nextUrl.searchParams.get('mode') || 'snapshot';
   const suite = request.nextUrl.searchParams.get('suite') || '';
   const grant = request.nextUrl.searchParams.get('grant')?.trim() || '';
+  const oidc = request.headers.get('x-vercel-oidc-token')?.trim()
+    || process.env.VERCEL_OIDC_TOKEN?.trim()
+    || '';
   const consoleErrors: string[] = [];
   const requestFailures: Array<{ url: string; error: string }> = [];
   let browser: Browser | undefined;
 
   try {
-    const engineeringSession = await exchangeEngineeringSession(grant);
+    const engineeringSession = await exchangeEngineeringSession(grant, oidc);
     browser = await openBrowser();
     const page = await browser.newPage();
     await page.setUserAgent('CircaHausInternalEngineeringBrowser/1.0');
