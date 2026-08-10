@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import chromium from '@sparticuz/chromium';
-import { chromium as playwrightChromium, type Browser } from 'playwright-core';
+import puppeteer, { type Browser } from 'puppeteer-core';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -17,10 +17,11 @@ function targetFrom(request: NextRequest) {
 }
 
 async function openBrowser(): Promise<Browser> {
-  return playwrightChromium.launch({
+  return puppeteer.launch({
     args: chromium.args,
     executablePath: await chromium.executablePath(),
     headless: true,
+    defaultViewport: { width: 1440, height: 1100, deviceScaleFactor: 1 },
   });
 }
 
@@ -39,12 +40,8 @@ export async function GET(request: NextRequest) {
 
   try {
     browser = await openBrowser();
-    const context = await browser.newContext({
-      viewport: { width: 1440, height: 1100 },
-      deviceScaleFactor: 1,
-      userAgent: 'CircaHausInternalEngineeringBrowser/1.0',
-    });
-    const page = await context.newPage();
+    const page = await browser.newPage();
+    await page.setUserAgent('CircaHausInternalEngineeringBrowser/1.0');
 
     page.on('console', (message) => {
       if (message.type() === 'error') consoleErrors.push(message.text());
@@ -57,13 +54,13 @@ export async function GET(request: NextRequest) {
     });
 
     const response = await page.goto(target.toString(), {
-      waitUntil: 'networkidle',
+      waitUntil: 'networkidle0',
       timeout: 30000,
     });
 
     if (mode === 'screenshot') {
       const png = await page.screenshot({ fullPage: true, type: 'png' });
-      return new NextResponse(png, {
+      return new NextResponse(Buffer.from(png), {
         status: 200,
         headers: {
           'content-type': 'image/png',
