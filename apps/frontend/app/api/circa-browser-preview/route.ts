@@ -39,7 +39,7 @@ async function openBrowser(): Promise<Browser> {
     args: chromium.args,
     executablePath: await chromium.executablePath(),
     headless: true,
-    defaultViewport: { width: 1440, height: 1100, deviceScaleFactor: 0.3 },
+    defaultViewport: { width: 1440, height: 1100, deviceScaleFactor: 0.12 },
   });
 }
 
@@ -62,7 +62,7 @@ export async function GET(request: NextRequest) {
 
     const response = await page.goto(target.toString(), { waitUntil: 'networkidle0', timeout: 30000 });
     await new Promise(resolve => setTimeout(resolve, 1200));
-    const jpeg = await page.screenshot({ fullPage: true, type: 'jpeg', quality: 45 });
+    const jpeg = await page.screenshot({ fullPage: true, type: 'jpeg', quality: 35 });
 
     return NextResponse.json({
       ok: true,
@@ -71,7 +71,7 @@ export async function GET(request: NextRequest) {
       finalUrl: page.url(),
       status: response?.status() ?? null,
       cssViewport: { width: 1440, height: 1100 },
-      deviceScaleFactor: 0.3,
+      deviceScaleFactor: 0.12,
       mimeType: 'image/jpeg',
       screenshotBase64: Buffer.from(jpeg).toString('base64'),
       capturedAt: new Date().toISOString(),
