@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, HTTPException
 
-from apps.backend.db import get_supabase
-from apps.backend.services.shopify_backfill import run_backfill_once
+from apps.backend.services.shopify_backfill import LEGACY_BACKFILL_BLOCK_REASON
 
 
 router = APIRouter(prefix="/shopify", tags=["shopify"])
@@ -12,32 +10,14 @@ router = APIRouter(prefix="/shopify", tags=["shopify"])
 
 @router.get("/backfill/status")
 async def backfill_status(merchant_id: str):
-    sb = get_supabase()
-    if not sb:
-        raise HTTPException(500, "Supabase not configured")
-    r = sb.table("backfill_runs").select("*").eq("merchant_id", merchant_id).eq("provider", "shopify").limit(1).execute()
-    if not r.data:
-        return JSONResponse(content={"ok": True, "merchant_id": merchant_id, "status": "none"})
-    run = r.data[0]
-    return JSONResponse(content={
-        "ok": True,
-        "merchant_id": merchant_id,
-        "status": run.get("status"),
-        "orders_processed": run.get("orders_processed"),
-        "customers_seen": run.get("customers_seen"),
-        "cursor_present": bool(run.get("cursor")),
-        "error": run.get("error"),
-        "started_at": run.get("started_at"),
-        "finished_at": run.get("finished_at"),
-    })
+    # Legacy endpoint accepted any arbitrary merchant_id without authentication,
+    # potentially leaking other merchants' import metrics. Do not expose data
+    # until tenant-authorization is implemented.
+    raise HTTPException(status_code=503, detail=LEGACY_BACKFILL_BLOCK_REASON)
 
 
 @router.post("/backfill/pump")
-async def backfill_pump(merchant_id: str, background: BackgroundTasks):
-    """
-    Runs one page of backfill in the background.
-    Call repeatedly until status=completed.
-    In production we can schedule automatically; for dev store this is perfect.
-    """
-    background.add_task(run_backfill_once, merchant_id)
-    return {"ok": True, "merchant_id": merchant_id, "message": "Backfill page queued."}
+async def backfill_pump(merchant_id: str):
+    # Do not queue a job that can rewrite loyalty history or trigger background
+    # vendor usage. Replace with an authenticated audited import pipeline.
+    raise HTTPException(status_code=503, detail=LEGACY_BACKFILL_BLOCK_REASON)
