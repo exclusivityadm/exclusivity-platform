@@ -184,9 +184,34 @@ def append_ledger(
     try:
         supabase.table("loyalty_ledger").insert(payload).execute()
     except Exception as e:
-        # If ref is duplicated, treat as idempotent replay and return current balance.
-        # (Supabase error parsing differs by version; safest is to proceed to balance read.)
-        pass
+        # Do not turn failed writes (permissions, missing tables, network errors)
+        # into apparent success. Only a *confirmed unique constraint conflict*
+        # may be interpreted as a potential idempotent replay.
+        if str(getattr(e, "code", "")) != "23505" or not ref:
+            raise CoreError("Could not record loyalty transaction; verify its status before retrying.", 503) from e
+
+        try:
+            matches = (
+                supabase.table("loyalty_ledger")
+                .select("customer_id,event_type,points_delta")
+                .eq("merchant_id", merchant["id"])
+                .eq("ref", ref)
+                .limit(1)
+                .execute()
+                .data
+            ) or []
+        except Exception as read_error:
+            raise CoreError("Could not verify loyalty transaction replay.", 503) from read_error
+
+        if not matches:
+            raise CoreError("Conflicting loyalty transaction reference.", 409)
+        previous = matches[0]
+        if (
+            str(previous.get("customer_id")) != str(customer["id"])
+            or previous.get("event_type") != event_type
+            or int(previous.get("points_delta") or 0) != delta
+        ):
+            raise CoreError("Transaction reference already belongs to a different loyalty event.", 409)
 
     return get_balance_and_tier(request, customer_email)
 
