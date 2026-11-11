@@ -40,3 +40,11 @@ Exclusivity remains an independent, industry-agnostic merchant loyalty and custo
 - Circa Haus release qualification and existing app-store blockers remain highest priority; do not introduce unfinished Exclusivity screens or make this a Circa Haus launch dependency.
 - **Both Exclusivity and Ether remain operationally paused.** Do not reactivate Render, Supabase, automation jobs, hosting or paid providers; no CI dispatch for this foundation.
 - Maintain recoverability and ownership isolation. Any future live run requires explicit account-level spending approval.
+
+## 2026-11-11 implementation checkpoint
+- **Created on branch `design/provider-neutral-core-20261111`:** normalized immutable commerce event contract; merchant+provider+source-account+event-scoped replay identity; currency-safe integer minor units; strict input contract; offline tests.
+- **Fixed (branch, not deployed):** older `loyalty_service.append_ledger` no longer silently treats every failed database insert as success; a confirmed unique-key replay must be verified against the same customer, event type and point delta.
+- **Blocked unsafe legacy operations (branch only):** Shopify backfill no longer deletes/reinserts historical loyalty records or uses floats; legacy backfill pump/status are inaccessible until rebuilt with merchant authorization. Legacy Shopify OAuth callback deliberately returns 503 instead of accepting an unsigned merchant ID and automatically initiating historical writes. Existing implementation retained in Git history.
+- **Remaining:** reconcile multiple loyalty schemas and lifetime-spend-versus-points tier definitions; one canonical ledger and exact replay semantics; rebuild Shopify OAuth with signed state, secret management and verified tenant binding; build an authenticated immutable historical importer; add Circa Haus adapter, consent, idempotency and fallback; complete local/offline tests and separately authorized staging proof. **No active integration or production readiness claim.**
+- **Validation:** repository files fetched back and inspected. Unit tests are committed but have **not been executed**; no GitHub Actions minutes used.
+- **Operational posture:** Exclusivity and Ether remain paused; this development branch is not a request to restart services.
